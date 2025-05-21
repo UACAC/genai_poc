@@ -445,10 +445,19 @@ def main():
     try:
         receiver.receive_and_log(args.timeout)
         
-        # get the txt file and save it under datasets directory two levels up
-        datasets_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'datasets')
+        # get the txt file and save it under datasets directory three levels up
+        datasets_dir = os.path.join(
+            os.path.dirname(
+            os.path.dirname(
+                os.path.dirname(os.path.abspath(__file__))
+            )
+            ),
+            'datasets'
+        )
         if not os.path.exists(datasets_dir):
             os.makedirs(datasets_dir)
+            
+        
         log_files = [f for f in os.listdir(receiver.log_dir) if f.endswith('.txt')]
         
         # check for text file that has been generated and convert to parquet file
@@ -476,10 +485,11 @@ def main():
             print("No pickle files found.")
             
         
-        # copy log files to datasets directory
-        for log_file in log_files:
-            src_path = os.path.join(receiver.log_dir, log_file)
-            dst_path = os.path.join(datasets_dir, log_file)
+        ## copy log, parquet, and pickle files to datasets directory
+        files_to_move = [f for f in os.listdir(receiver.log_dir) if f.endswith('.txt') or f.endswith('.parquet') or f.endswith('.pkl')]
+        for move_file in files_to_move:
+            src_path = os.path.join(receiver.log_dir, move_file)
+            dst_path = os.path.join(datasets_dir, move_file)
             os.rename(src_path, dst_path)
             print(f"Moved {src_path} to {dst_path}")
             
