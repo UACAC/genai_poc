@@ -1,0 +1,5 @@
+.env
+volumes/**
+data/**
+models/** 
+logs/**

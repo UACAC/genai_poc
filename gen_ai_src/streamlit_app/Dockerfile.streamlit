@@ -1,0 +1,29 @@
+# Use Python base image
+FROM python:3.11.9-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+
+# Install Poetry
+RUN curl -sSL https://install.python-poetry.org | python3 - && \
+    ln -s /root/.local/bin/poetry /usr/local/bin/poetry
+
+# Copy dependency files first
+COPY pyproject.toml poetry.lock ./
+
+# Install dependencies via Poetry
+RUN poetry config virtualenvs.create false && poetry install --no-interaction --no-ansi
+
+# Run OpenAI migration
+RUN python -m openai migrate
+
+# Copy Streamlit app files
+COPY src/streamlit_app /app
+
+# Set Python path so Streamlit recognizes modules
+ENV PYTHONPATH="/app"
+
+# Run Streamlit app
+CMD ["poetry", "run", "streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
