@@ -14,6 +14,7 @@ from opendis.DataOutputStream import DataOutputStream
 # Constants for simulation
 DEFAULT_PORT = 3000
 DEFAULT_MULTICAST_GROUP = "239.1.2.3"
+LOCALHOST = "127.0.0.1"
 DEFAULT_EXERCISE_ID = 1
 
 class PDUGenerator:
@@ -23,6 +24,7 @@ class PDUGenerator:
         """Initialize the PDU generator"""
         self.port = port
         self.multicast_group = multicast_group
+        self.localhost = LOCALHOST
         self.exercise_id = exercise_id
         self.socket = None
         self.entity_counter = 1
@@ -33,6 +35,7 @@ class PDUGenerator:
         try:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
             self.socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
+            
             return True
         except socket.error as e:
             print(f"Error creating socket: {e}")
@@ -75,10 +78,10 @@ class PDUGenerator:
             pdu_bytes = memoryStream.getvalue()
             
             # Send to multicast group
-            self.socket.sendto(pdu_bytes, (self.multicast_group, self.port))
+            self.socket.sendto(pdu_bytes, (self.localhost, self.port))
             
             # Print info about the sent PDU
-            print(f"Sent {pdu.__class__.__name__} ({len(pdu_bytes)} bytes) to {self.multicast_group}:{self.port}")
+            print(f"Sent {pdu.__class__.__name__} ({len(pdu_bytes)} bytes) to {self.localhost}:{self.port}")
             return True
         except Exception as e:
             print(f"Error sending PDU: {e}")
