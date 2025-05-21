@@ -1,1 +1,2 @@
 src/dataOps/dis_synthetic_pdu/pdu_logs/**
+src/dataOps/dis_synthetic_pdu/__pycache__/**
