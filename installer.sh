@@ -1,9 +1,9 @@
 #!/bin/bash
-# Platform-agnostic JITC GENAI Validation System setup
+# Platform-agnostic GENAI Validation System setup
 
 # Configuration - change these as needed
 PROJECT_NAME="$(basename "$PWD")"
-REPO_URL="https://github.com/martinmanuel9/jitc_genai_validation.git"
+REPO_URL="https://github.com/martinmanuel9/dis_verification_genai"
 
 echo "Setting up $PROJECT_NAME..."
 
@@ -103,7 +103,7 @@ else
         unzip -o "$TEMP_ZIP" 
         
         # Move files from the extracted directory
-        EXTRACT_DIR=$(find . -maxdepth 1 -type d -name "*jitc_genai_validation*" | head -1)
+        EXTRACT_DIR=$(find . -maxdepth 1 -type d -name "*dis_verification_genai*" | head -1)
         if [ -n "$EXTRACT_DIR" ]; then
             echo "Moving files from $EXTRACT_DIR to $PROJECT_DIR"
             mv "$EXTRACT_DIR"/* .
@@ -278,7 +278,7 @@ else
     exit 1
 fi
 
-echo "JITC GENAI Validation System started. Access the UI at http://localhost:8501"
+echo "GENAI Document Generation System started. Access the UI at http://localhost:8501"
 EOL
 
 cat > "$PROJECT_DIR/stop.sh" << EOL
@@ -295,7 +295,7 @@ else
     exit 1
 fi
 
-echo "JITC GENAI Validation System stopped."
+echo "GENAI Validation System stopped."
 EOL
 
 # Make scripts executable

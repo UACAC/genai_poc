@@ -11,4 +11,4 @@ else
     exit 1
 fi
 
-echo "JITC GENAI Validation System started. Access the UI at http://localhost:8501"
+echo "GENAI Validation System started. Access the UI at http://localhost:8501"

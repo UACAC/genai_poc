@@ -29,7 +29,7 @@ remove:
 	docker rmi jitc-genai-validation
 
 # Stop and remove all containers and images
-clean-all: compose-down --rmi all || docker compose down --rmi all
+clean-all: docker compose-down --rmi all || docker compose down --rmi all
 
 
 status:

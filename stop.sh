@@ -11,4 +11,4 @@ else
     exit 1
 fi
 
-echo "JITC GENAI Validation System stopped."
+echo "GENAI Validation System stopped."
