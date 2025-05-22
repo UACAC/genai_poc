@@ -17,19 +17,19 @@ compose-up:
 
 # Clean up Docker images
 clean:
-	docker rmi jitc-genai-validation
+	docker rmi dis_verification_genai
 
 # Build and run in one command
 all: build status 
 
 # Remove Docker container and image
 remove:
-	docker ps -q -f ancestor=jitc-genai-validation | xargs -r docker stop
-	docker ps -a -q -f ancestor=jitc-genai-validation | xargs -r docker rm
-	docker rmi jitc-genai-validation
+	docker ps -q -f ancestor=dis_verification_genai| xargs -r docker stop
+	docker ps -a -q -f ancestor=dis_verification_genai | xargs -r docker rm
+	docker rmi dis_verification_genai
 
 # Stop and remove all containers and images
-clean-all: docker compose-down --rmi all || docker compose down --rmi all
+clean-all: docker compose-down all || docker compose down all
 
 
 status:

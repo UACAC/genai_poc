@@ -1,7 +1,5 @@
 FROM ollama/ollama:latest
 
-# Expose Ollama API port
 EXPOSE 11434
 
-# Just start Ollama server (no downloads needed as models are mounted)
 ENTRYPOINT ["/bin/sh", "-c", "ollama serve & wait"]

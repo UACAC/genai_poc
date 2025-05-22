@@ -20,7 +20,7 @@ RAG_GEMMA_API = "http://fastapi:9020/chat-rag-gemma"
 CHROMADB_API = "http://chromadb:8020"
 
 st.set_page_config(page_title="Chatbot", layout="wide")
-st.title("JITC GenAI Chatbot with RAG")
+st.title("GenAI Chatbot with RAG")
 
 collections = fetch_collections()
 

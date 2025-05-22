@@ -1,34 +1,23 @@
 import uuid
+from typing import List, Dict, Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from sqlalchemy.orm import Session
+
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+
 from services.database import SessionLocal, ComplianceAgent, DebateSession, ChatHistory
-from services.rag_service import RAGService
 from services.llm_service import LLMService
+from services.rag_service import EnhancedRAGService
 from services.agent_service import AgentService
 from services.rag_agent_service import RAGAgentService
-from typing import Optional, List
 
-# Try to import enhanced LangChain services
-try:
-    from services.enhanced_rag_service import EnhancedRAGService
-    from services.enhanced_agent_service import EnhancedAgentService
-    LANGCHAIN_AVAILABLE = True
-except ImportError:
-    LANGCHAIN_AVAILABLE = False
+router = APIRouter()
 
-router = APIRouter()  
-
-# Initialize existing services
-rag_service = RAGService()
 llm_service = LLMService()
+rag_service = EnhancedRAGService()
 agent_service = AgentService()
 rag_agent_service = RAGAgentService()
-
-# Initialize LangChain services if available
-if LANGCHAIN_AVAILABLE:
-    enhanced_rag_service = EnhancedRAGService()
-    enhanced_agent_service = EnhancedAgentService()
 
 def get_db():
     db = SessionLocal()
@@ -37,48 +26,28 @@ def get_db():
     finally:
         db.close()
 
+class ChatRequest(BaseModel):
+    query: str
+
 class RAGQueryRequest(BaseModel):
     query: str
     collection_name: str
 
-class ChatRequest(BaseModel):
-    query: str
-
-class CreateAgentRequest(BaseModel):
-    name: str
-    model_name: str
-    system_prompt: str
-    user_prompt_template: str
-
 class ComplianceCheckRequest(BaseModel):
     data_sample: str
-    agent_ids: list[int]
-
-class DebateRequest(BaseModel):
-    session_id: str
-    data_sample: str
-    
-class CreateSessionDebateRequest(BaseModel):
-    session_id: str | None = None
-    agent_ids: list[int]
-    data_sample: str
-
-class DebateSequenceRequest(BaseModel):
-    session_id: Optional[str] = None
     agent_ids: List[int]
-    data_sample: str
-    
+
 class RAGCheckRequest(BaseModel):
     query_text: str
     collection_name: str
-    agent_ids: list[int]
+    agent_ids: List[int]
 
 class RAGDebateSequenceRequest(BaseModel):
     session_id: Optional[str] = None
     agent_ids: List[int]
     query_text: str
     collection_name: str
-    
+
 @router.post("/chat-gpt4")
 async def chat_gpt4(request: ChatRequest, db: Session = Depends(get_db)):
     try:
@@ -89,30 +58,6 @@ async def chat_gpt4(request: ChatRequest, db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/chat-gpt4-rag")
-async def chat_rag_gpt4(request: RAGQueryRequest, db: Session = Depends(get_db)):
-    """
-    This endpoint calls GPT-4 with retrieval (RAG) using the selected collection.
-    It also stores the chat interaction in the database.
-    Uses enhanced LangChain service if available.
-    """
-    try:
-        user_prompt = request.query
-        collection_name = request.collection_name
-
-        # Use LangChain service if available, otherwise fall back to legacy
-        if LANGCHAIN_AVAILABLE:
-            response = enhanced_rag_service.query_gpt(user_prompt, collection_name, db)
-        else:
-            response = rag_service.query_gpt(user_prompt, collection_name, db)
-            
-        db.add(ChatHistory(user_query=request.query, response=response))
-        db.commit()
-        return {"response": response}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"500: RAG query failed: {str(e)}")
-
-# Chat Endpoints for LLaMA, Mistral, and Gemma
 @router.post("/chat-llama")
 async def chat_llama(request: ChatRequest, db: Session = Depends(get_db)):
     try:
@@ -143,16 +88,20 @@ async def chat_gemma(request: ChatRequest, db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# RAG Endpoints for LLaMA, Mistral, and Gemma - Enhanced with LangChain
+@router.post("/chat-gpt4-rag")
+async def chat_rag_gpt4(request: RAGQueryRequest, db: Session = Depends(get_db)):
+    try:
+        response = rag_service.query_gpt(request.query, request.collection_name)
+        db.add(ChatHistory(user_query=request.query, response=response))
+        db.commit()
+        return {"response": response}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"500: RAG query failed: {str(e)}")
+
 @router.post("/chat-rag-llama")
 async def chat_rag_llama(request: RAGQueryRequest, db: Session = Depends(get_db)):
     try:
-        # Use LangChain service if available
-        if LANGCHAIN_AVAILABLE:
-            response = enhanced_rag_service.query_llama(request.query, request.collection_name)
-        else:
-            response = rag_service.query_llama(request.query, request.collection_name)
-            
+        response = rag_service.query_llama(request.query, request.collection_name)
         db.add(ChatHistory(user_query=request.query, response=response))
         db.commit()
         return {"response": response}
@@ -162,12 +111,7 @@ async def chat_rag_llama(request: RAGQueryRequest, db: Session = Depends(get_db)
 @router.post("/chat-rag-mistral")
 async def chat_rag_mistral(request: RAGQueryRequest, db: Session = Depends(get_db)):
     try:
-        # Use LangChain service if available
-        if LANGCHAIN_AVAILABLE:
-            response = enhanced_rag_service.query_mistral(request.query, request.collection_name)
-        else:
-            response = rag_service.query_mistral(request.query, request.collection_name)
-            
+        response = rag_service.query_mistral(request.query, request.collection_name)
         db.add(ChatHistory(user_query=request.query, response=response))
         db.commit()
         return {"response": response}
@@ -177,19 +121,13 @@ async def chat_rag_mistral(request: RAGQueryRequest, db: Session = Depends(get_d
 @router.post("/chat-rag-gemma")
 async def chat_rag_gemma(request: RAGQueryRequest, db: Session = Depends(get_db)):
     try:
-        # Use LangChain service if available
-        if LANGCHAIN_AVAILABLE:
-            response = enhanced_rag_service.query_gemma(request.query, request.collection_name)
-        else:
-            response = rag_service.query_gemma(request.query, request.collection_name)
-            
+        response = rag_service.query_gemma(request.query, request.collection_name)
         db.add(ChatHistory(user_query=request.query, response=response))
         db.commit()
         return {"response": response}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"500: RAG query failed: {str(e)}")
 
-# Fetch Chat History
 @router.get("/chat-history")
 def get_chat_history(db: Session = Depends(get_db)):
     records = db.query(ChatHistory).all()
@@ -199,48 +137,17 @@ def get_chat_history(db: Session = Depends(get_db)):
             "user_query": record.user_query,
             "response": record.response,
             "timestamp": record.timestamp
-        }
-        for record in records
+        } for record in records
     ]
-
-# Agent and Compliance Check Endpoints
-@router.post("/create-agent")
-async def create_agent(request: CreateAgentRequest, db: Session = Depends(get_db)):
-    try:
-        new_agent = ComplianceAgent(
-            name=request.name,
-            model_name=request.model_name,
-            system_prompt=request.system_prompt,
-            user_prompt_template=request.user_prompt_template
-        )
-        db.add(new_agent)
-        db.commit()
-        db.refresh(new_agent)
-        return {"message": "Agent created successfully!", "agent_id": new_agent.id}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/get-agents")
-async def get_agents(db: Session = Depends(get_db)):
-    agents = db.query(ComplianceAgent).all()
-    return {"agents": [{"id": agent.id, "name": agent.name, "model_name": agent.model_name} for agent in agents]}
 
 @router.post("/compliance-check")
 async def compliance_check(request: ComplianceCheckRequest, db: Session = Depends(get_db)):
     try:
-        # Use LangChain service if available for better agent interactions
-        if LANGCHAIN_AVAILABLE:
-            result = enhanced_agent_service.run_compliance_check(
-                data_sample=request.data_sample,
-                agent_ids=request.agent_ids,
-                db=db
-            )
-        else:
-            result = agent_service.run_compliance_check(
-                data_sample=request.data_sample,
-                agent_ids=request.agent_ids,
-                db=db
-            )
+        result = agent_service.run_compliance_check(
+            data_sample=request.data_sample,
+            agent_ids=request.agent_ids,
+            db=db
+        )
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -248,21 +155,12 @@ async def compliance_check(request: ComplianceCheckRequest, db: Session = Depend
 @router.post("/rag-check")
 async def rag_check(request: RAGCheckRequest, db: Session = Depends(get_db)):
     try:
-        # Use LangChain service if available for better RAG interactions
-        if LANGCHAIN_AVAILABLE:
-            result = enhanced_rag_service.run_rag_check(
-                query_text=request.query_text,
-                collection_name=request.collection_name,
-                agent_ids=request.agent_ids,
-                db=db
-            )
-        else:
-            result = rag_agent_service.run_rag_check(
-                query_text=request.query_text,
-                collection_name=request.collection_name,
-                agent_ids=request.agent_ids,
-                db=db
-            )
+        result = rag_agent_service.run_rag_check(
+            query_text=request.query_text,
+            collection_name=request.collection_name,
+            agent_ids=request.agent_ids,
+            db=db
+        )
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -270,26 +168,13 @@ async def rag_check(request: RAGCheckRequest, db: Session = Depends(get_db)):
 @router.post("/rag-debate-sequence")
 async def rag_debate_sequence(request: RAGDebateSequenceRequest, db: Session = Depends(get_db)):
     try:
-        # Use LangChain service if available for enhanced debate sequences
-        if LANGCHAIN_AVAILABLE:
-            session_id, chain = enhanced_rag_service.run_rag_debate_sequence(
-                db=db,
-                session_id=request.session_id,
-                agent_ids=request.agent_ids,
-                query_text=request.query_text,
-                collection_name=request.collection_name
-            )
-        else:
-            session_id, chain = rag_agent_service.run_rag_debate_sequence(
-                db=db,
-                session_id=request.session_id,
-                agent_ids=request.agent_ids,
-                query_text=request.query_text,
-                collection_name=request.collection_name
-            )
-        return {
-            "session_id": session_id,
-            "debate_chain": chain
-        }
+        session_id, chain = rag_agent_service.run_rag_debate_sequence(
+            db=db,
+            session_id=request.session_id,
+            agent_ids=request.agent_ids,
+            query_text=request.query_text,
+            collection_name=request.collection_name
+        )
+        return {"session_id": session_id, "debate_chain": chain}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

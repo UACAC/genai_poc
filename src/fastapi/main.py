@@ -16,7 +16,7 @@ app.include_router(chat_router)
 
 @app.get("/")
 async def root():
-    return {"message": "Welcome to the SEI Agent LLM Chatbot!"}
+    return {"message": "Welcome to the LLM Chatbot!"}
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=9020, reload=False)
