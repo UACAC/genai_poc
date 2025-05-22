@@ -11,8 +11,8 @@ echo "Setting up $PROJECT_NAME..."
 CURRENT_DIR="$(pwd)"
 echo "Current directory: $CURRENT_DIR"
 
-# Create project directory in user's home folder
-PROJECT_DIR="$HOME/$PROJECT_NAME"
+# Create project directory in user's folder
+PROJECT_DIR="$PROJECT_NAME"
 echo "Project directory: $PROJECT_DIR"
 
 # Check for Docker
@@ -136,10 +136,10 @@ cp "$CURRENT_DIR/.env" "$PROJECT_DIR/.env"
 
 # Update docker-compose.yml to use the persistent model directory
 echo "Updating docker-compose.yml for persistent model storage..."
-MODEL_PATH="$HOME/$PROJECT_NAME/models"
-CHROMADB_PATH="$HOME/$PROJECT_NAME/data/chromadb"
-POSTGRES_PATH="$HOME/$PROJECT_NAME/data/postgres"
-HUGGINGFACE_PATH="$HOME/$PROJECT_NAME/data/huggingface_cache"
+MODEL_PATH="$PROJECT_NAME/models"
+CHROMADB_PATH="$PROJECT_NAME/data/chromadb"
+POSTGRES_PATH="$PROJECT_NAME/data/postgres"
+HUGGINGFACE_PATH="$PROJECT_NAME/data/huggingface_cache"
 
 # Function to check and update docker-compose.yml
 update_docker_compose() {
