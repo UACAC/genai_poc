@@ -30,20 +30,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.ollama
+    container_name: llama
     ports:
       - "11434:11434"
     volumes:
       - ./models:/root/.ollama
-    command: >
-      /bin/sh -c "
-      ollama serve &
-      for i in {1..10}; do
-        if curl -s http://localhost:11434/version; then break; fi
-        echo 'Waiting for Ollama...'; sleep 3;
-      done &&
-      tail -f /dev/null"
+      - ./start_ollama.sh:/start.sh
+    entrypoint: ["/bin/sh", "/start.sh"]
     networks:
-      rag_net: {}
+      - rag_net
 
   fastapi:
     build:

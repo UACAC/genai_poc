@@ -1,5 +1,14 @@
 FROM ollama/ollama:latest
 
+# Install curl
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+
+# Copy startup script
+COPY start_ollama.sh /start.sh
+RUN chmod +x /start.sh
+
+# Expose the API port
 EXPOSE 11434
 
-ENTRYPOINT ["/bin/sh", "-c", "ollama serve & wait"]
+# Start script
+ENTRYPOINT ["/bin/sh", "/start.sh"]
