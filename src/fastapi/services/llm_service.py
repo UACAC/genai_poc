@@ -19,7 +19,10 @@ class LLMService:
     def __init__(self):
         self.openai_api_key = os.getenv("OPEN_AI_API_KEY")
         self.langchain_enabled = LANGCHAIN_ENABLED and bool(self.openai_api_key)
-        self.ollama_url = "http://llama:11434/api/generate"
+
+        # Support both internal (Docker) and external (localhost) FastAPI URLs
+        self.ollama_host = os.getenv("OLLAMA_HOST", "llama")
+        self.ollama_url = f"http://{self.ollama_host}:11434/api/generate"
 
         self.models = {}
         if self.langchain_enabled:
@@ -27,18 +30,18 @@ class LLMService:
 
     def _init_langchain_models(self):
         try:
+            base_url = f"http://{self.ollama_host}:11434"
             self.models = {
                 "gpt-4": ChatOpenAI(model_name="gpt-4o", openai_api_key=self.openai_api_key),
-                "llama3": Ollama(model="llama3", base_url="http://llama:11434"),
-                "mistral": Ollama(model="mistral", base_url="http://llama:11434"),
-                "gemma": Ollama(model="gemma", base_url="http://llama:11434"),
+                "llama3": Ollama(model="llama3", base_url=base_url),
+                "mistral": Ollama(model="mistral", base_url=base_url),
+                "gemma": Ollama(model="gemma", base_url=base_url),
             }
         except Exception as e:
             print(f"LangChain init failed: {e}")
             self.langchain_enabled = False
 
     def query_gpt4(self, prompt: str) -> str:
-        """Convenience method to query GPT-4."""
         return self.query_model("gpt-4", prompt)
 
     def query_llama(self, prompt: str) -> str:
@@ -59,6 +62,9 @@ class LLMService:
             print(f"[LangChain Fallback] {model_name}: {e}")
 
         return self._query_legacy(model_name, prompt)
+
+    def query_with_langchain(self, model_name: str, prompt: str) -> str:
+        return self.query_model(model_name, prompt)
 
     def _query_langchain(self, model_name: str, prompt: str) -> str:
         model = self.models[model_name]
@@ -89,10 +95,13 @@ class LLMService:
         return list(self.models.keys()) if self.langchain_enabled else ["llama3", "mistral", "gemma"]
 
     def health_check(self) -> Dict[str, Any]:
-        results = {"langchain": self.langchain_enabled, "openai_configured": bool(self.openai_api_key)}
+        results = {
+            "langchain": self.langchain_enabled,
+            "openai_configured": bool(self.openai_api_key)
+        }
         if self.ollama_url:
             try:
-                r = requests.get("http://llama:11434/api/tags")
+                r = requests.get(f"http://{self.ollama_host}:11434/api/tags")
                 results["ollama"] = r.status_code == 200
             except Exception as e:
                 results["ollama"] = f"Error: {e}"

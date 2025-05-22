@@ -11,6 +11,12 @@ from services.llm_service import LLMService
 from services.rag_service import EnhancedRAGService
 from services.agent_service import AgentService
 from services.rag_agent_service import RAGAgentService
+from schemas.compliance import (
+    ComplianceCheckRequest,
+    RAGCheckRequest,
+    RAGDebateSequenceRequest,
+    CreateComplianceAgentRequest  
+)
 
 router = APIRouter()
 
@@ -47,6 +53,14 @@ class RAGDebateSequenceRequest(BaseModel):
     agent_ids: List[int]
     query_text: str
     collection_name: str
+    
+class CreateAgentRequest(BaseModel):
+    name: str
+    model_name: str
+    system_prompt: str
+    user_prompt_template: str
+    
+
 
 @router.post("/chat-gpt4")
 async def chat_gpt4(request: ChatRequest, db: Session = Depends(get_db)):
@@ -176,5 +190,35 @@ async def rag_debate_sequence(request: RAGDebateSequenceRequest, db: Session = D
             collection_name=request.collection_name
         )
         return {"session_id": session_id, "debate_chain": chain}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@router.post("/create-agent")
+async def create_agent(request: CreateAgentRequest, db: Session = Depends(get_db)):
+    try:
+        new_agent = ComplianceAgent(
+            name=request.name,
+            model_name=request.model_name,
+            system_prompt=request.system_prompt,
+            user_prompt_template=request.user_prompt_template
+        )
+        db.add(new_agent)
+        db.commit()
+        db.refresh(new_agent)
+        return {"message": "Agent created", "agent_id": new_agent.id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@router.get("/get-agents")
+async def get_agents(db: Session = Depends(get_db)):
+    try:
+        agents = db.query(ComplianceAgent).all()
+        return {"agents": [
+            {
+                "id": agent.id,
+                "name": agent.name,
+                "model_name": agent.model_name,
+            } for agent in agents
+        ]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

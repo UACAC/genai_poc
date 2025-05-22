@@ -15,6 +15,8 @@ from langchain.chains import LLMChain
 from langchain.memory import ConversationBufferMemory
 from langchain_core.pydantic_v1 import BaseModel, Field
 from langchain.output_parsers import PydanticOutputParser
+from schemas.compliance import ComplianceResultSchema
+
 
 class ComplianceResult(BaseModel):
     compliant: bool = Field(description="Whether the content is compliant")
@@ -27,7 +29,7 @@ class AgentService:
     def __init__(self):
         self.compliance_agents: List[Dict[str, Any]] = []
         self.llms = self._initialize_llms()
-        self.compliance_parser = PydanticOutputParser(pydantic_object=ComplianceResult)
+        self.compliance_parser = PydanticOutputParser(pydantic_object=ComplianceResultSchema)
 
     def _initialize_llms(self) -> Dict[str, Any]:
         openai_api_key = os.getenv("OPEN_AI_API_KEY")

@@ -5,7 +5,8 @@ import torch
 torch.classes.__path__ = [] 
 
 # FastAPI API endpoint
-LLM_API = "http://fastapi:9020"
+import os
+LLM_API = os.getenv("LLM_API", "http://localhost:9020")
 
 # Fetch collections from ChromaDB
 collections = fetch_collections()

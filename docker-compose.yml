@@ -79,6 +79,7 @@ services:
     environment:
       - HUGGINGFACE_HUB_TOKEN=${HUGGINGFACE_API_KEY}
       - STREAMLIT_WATCH_FILES=false
+      - LLM_API=http://fastapi:9020
     volumes:
       - ./src/streamlit_app/pyproject.toml:/app/pyproject.toml
       - ./src/streamlit_app/poetry.lock:/app/poetry.lock
