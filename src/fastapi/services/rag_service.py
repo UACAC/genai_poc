@@ -127,7 +127,7 @@ class RAGService:
     def get_relevant_documents(self, query: str, collection_name: str) -> Tuple[List[str], bool]:
         """Get relevant documents via FastAPI"""
         try:
-            print(f"🔍 RAG Query (API): '{query[:100]}...' in collection: '{collection_name}'")
+            print(f"RAG Query (API): '{query[:100]}...' in collection: '{collection_name}'")
             
             # Check if collection exists and has documents
             try:
@@ -273,7 +273,7 @@ class RAGService:
                         print(f"Preview: {doc[:150]}...")
                     
                     # Test a query
-                    test_queries = ["document", "legal", "court", "analysis"]
+                    test_queries = ["document",  "analysis"]
                     for query in test_queries:
                         docs_result, found = self.get_relevant_documents(query, collection_name)
                         if found:
