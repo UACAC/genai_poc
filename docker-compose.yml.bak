@@ -5,33 +5,44 @@ services:
     restart: always
     ports:
       - "5432:5432"
+    env_file:
+      - .env
     environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: rag_memory
+      POSTGRES_USER: ${DB_USERNAME}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
     volumes:
-      - ${HOME}/jitc_genai_validation/data/postgres:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - legal_ai_network
+
   chromadb:
     build:
       context: ./src/chromadb
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.chromadb
     container_name: chromadb
     ports:
       - "8020:8020"
     environment:
       - CHROMADB_PERSIST_DIRECTORY=/app/chroma_db_data
     volumes:
-      - ${HOME}/jitc_genai_validation/data/chromadb:/app/chroma_db_data
-  llama:
-    container_name: llama
+      - chromadata:/app/chroma_db_data
+    networks:
+      - legal_ai_network
+
+  ollama:
     build:
       context: .
       dockerfile: Dockerfile.ollama
+    image: ollama/ollama:latest
+    container_name: ollama
     ports:
       - "11434:11434"
     volumes:
-      - ${HOME}/jitc_genai_validation/models:/root/.ollama
-    entrypoint: ["/bin/sh", "-c", "ollama serve & wait"]
+      - ollama_models:/root/.ollama
+    networks:
+      - legal_ai_network
+
   fastapi:
     build:
       context: ./src/fastapi
@@ -41,39 +52,38 @@ services:
       - "9020:9020"
     env_file:
       - .env
-    environment:
-      - HUGGINGFACE_HUB_TOKEN=${HUGGINGFACE_API_KEY}
-      - OPEN_AI_API_KEY=${OPEN_AI_API_KEY}
-      - LANGCHAIN_API_KEY=${LANGCHAIN_API_KEY}
-      - DATABASE_URL=postgresql://user:password@postgres_db:5432/rag_memory
-      - HF_HOME=/app/huggingface_cache
     depends_on:
       - postgres
       - chromadb
-      - llama
+      - ollama
     volumes:
       - ./src/fastapi/pyproject.toml:/app/pyproject.toml
       - ./src/fastapi/poetry.lock:/app/poetry.lock
-      - ${HOME}/jitc_genai_validation/data/huggingface_cache:/app/huggingface_cache
+      - huggingface_cache:/app/huggingface_cache
+    networks:
+      - legal_ai_network
+
   streamlit:
     build:
-      context: .
-      dockerfile: src/streamlit_app/Dockerfile.streamlit
-      args:
-        HUGGINGFACE_API_KEY: ${HUGGINGFACE_API_KEY}
-    container_name: streamlit_ui
+      context: ./src/streamlit
+      dockerfile: Dockerfile.streamlit
+    container_name: streamlit
     ports:
       - "8501:8501"
-    depends_on:
-      - fastapi
-      - chromadb
-      - llama
-      - postgres
     env_file:
       - .env
-    environment:
-      - HUGGINGFACE_HUB_TOKEN=${HUGGINGFACE_API_KEY}
-      - STREAMLIT_WATCH_FILES=false
     volumes:
-      - ./src/streamlit_app/pyproject.toml:/app/pyproject.toml
-      - ./src/streamlit_app/poetry.lock:/app/poetry.lock
+      - ./src/streamlit/pyproject.toml:/app/pyproject.toml
+      - ./src/streamlit/poetry.lock:/app/poetry.lock
+    networks:
+      - legal_ai_network
+
+networks:
+  legal_ai_network:
+    driver: bridge
+
+volumes:
+  pgdata:
+  chromadata:
+  ollama_models:
+  huggingface_cache:
