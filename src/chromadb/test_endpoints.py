@@ -1,7 +1,8 @@
 import requests
 import json
+import os
 
-BASE_URL = "http://localhost:8020"
+BASE_URL = os.getenv("CHROMA_URL", "http://localhost:8020")
 
 
 def test_health():

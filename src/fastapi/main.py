@@ -2,7 +2,7 @@
 from fastapi import FastAPI
 from services.database import init_db
 import uvicorn
-from routers.chat import router as chat_router
+from routers.router import router as chat_router
 
 
 app = FastAPI()

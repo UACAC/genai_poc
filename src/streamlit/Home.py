@@ -4,7 +4,7 @@ import os
 import nest_asyncio
 import datetime
 import time
-from utils import fetch_collections, get_available_models, check_model_availability
+from utils import fetch_collections, get_available_models
 import torch
 
 torch.classes.__path__ = []
