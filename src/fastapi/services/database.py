@@ -291,12 +291,13 @@ def get_db():
     finally:
         db.close()
 
-def update_agent_performance(agent_id: int, response_time_ms: int, success: bool):
+def update_agent_performance(agent_id: int, response_time_ms: int, success: bool = True):
     db = SessionLocal()
     try:
         agent = db.query(ComplianceAgent).filter(ComplianceAgent.id == agent_id).first()
         if agent:
-            agent.total_queries += 1
+            agent.total_queries = (agent.total_queries or 0) + 1
+            
             if agent.avg_response_time_ms is None:
                 agent.avg_response_time_ms = response_time_ms
             else:
@@ -316,11 +317,7 @@ def update_agent_performance(agent_id: int, response_time_ms: int, success: bool
     finally:
         db.close()
 
-# def log_compliance_result(agent_id: int, data_sample: str, compliant: Optional[bool],
-#                             confidence_score: Optional[float], reason: str,
-#                             raw_response: str, processing_method: str,
-#                             response_time_ms: int, model_used: str,
-#                             session_id: Optional[str] = None):
+
 def log_compliance_result(agent_id: int, data_sample: str,
                             confidence_score: Optional[float], reason: str,
                             raw_response: str, processing_method: str,
@@ -332,7 +329,6 @@ def log_compliance_result(agent_id: int, data_sample: str,
             session_id=session_id,
             agent_id=agent_id,
             data_sample=data_sample,
-            # compliant=compliant,
             confidence_score=confidence_score,
             reason=reason,
             raw_response=raw_response,
@@ -342,8 +338,7 @@ def log_compliance_result(agent_id: int, data_sample: str,
         )
         db.add(result)
         db.commit()
-        # update_agent_performance(agent_id, response_time_ms, compliant is not None)
-        update_agent_performance(agent_id, response_time_ms)
+        update_agent_performance(agent_id, response_time_ms, True)  # Fix the call
     except Exception as e:
         print(f"Log result error: {e}")
         db.rollback()

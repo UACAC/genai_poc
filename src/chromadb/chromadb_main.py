@@ -47,7 +47,6 @@ def list_collections():
     List all ChromaDB collections (returns the list of names).
     """
     try:
-        # FIXED: Extract just the collection names, not the full objects
         collections = chroma_client.list_collections()
         logger.info(f"Raw collections response: {collections}")
         

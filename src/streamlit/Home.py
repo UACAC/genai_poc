@@ -51,10 +51,14 @@ def check_model_status(model_name):
 
 # Model configurations
 model_key_map = {
+    "GPT-4": "gpt-4",
+    "GPT-3.5 Turbo": "gpt-3.5-turbo", 
     "LLaMA": "llama3",
 }
 
 model_descriptions = {
+    "gpt-4": "🧠 Most capable model for complex analysis",
+    "gpt-3.5-turbo": "💡 Cost-effective model for general tasks",
     "llama3": "🦙 Fast and efficient general-purpose model",
 }
 
@@ -82,28 +86,35 @@ with st.sidebar:
         with st.expander("System Details"):
             st.json(st.session_state.health_status)
 
-    st.header("🤖 Available Models")
+    # st.header("Available Models")
     
-    # Model management buttons
-    col1 = st.columns(1)
-    with col1:
-        if st.button("Refresh"):
-            st.session_state.available_models = get_available_models_cached()
-            st.session_state.legal_models = []
-            st.success("Refreshed!")
+    # # Model management buttons
+    # col1, col2 = st.columns(2)
+    # with col1:
+    #     if st.button("Refresh"):
+    #         st.session_state.available_models = get_available_models_cached()
+    #         st.session_state.legal_models = []
+    #         st.success("Refreshed!")
+    
+    # # with col2:
+    # #     if st.button("🧪 Test"):
+    # #         with st.spinner("Testing..."):
+    # #             available_models = check_model_availability()
+    # #             st.session_state.available_models = available_models
+    # #             st.success(f"Found {len(available_models)} models")
     
     
-    # Display available models
-    available_models = st.session_state.available_models or get_available_models_cached()
+    # # Display available models
+    # available_models = st.session_state.available_models or get_available_models_cached()
 
-    if available_models:
-        for model in available_models:
-            if model in model_descriptions:
-                st.text(f"{model}")
-            else:
-                st.text(f"{model}")
-    else:
-        st.info("Click 'Refresh' to load models")
+    # if available_models:
+    #     for model in available_models:
+    #         if model in model_descriptions:
+    #             st.text(f"{model}")
+    #         else:
+    #             st.text(f"{model}")
+    # else:
+    #     st.info("Click 'Refresh' to load models")
 
     st.header("Collections")
     
@@ -351,12 +362,35 @@ elif chat_mode == "🤖 AI Agent Simulation":
                     endpoint = f"{FASTAPI_URL}/compliance-check"
                 
                 with st.spinner("🤖 Specialized agents are analyzing the content..."):
+                    status_placeholder = st.empty()
                     try:
+                        status_placeholder.info("Connecting to AI model...")
                         response = requests.post(endpoint, json=payload, timeout=300)
+                        
+                        # if response.ok:
+                        #     result = response.json().get("response", "")
+                        #     status_placeholder.empty()
+                            
+                        #     st.success("Agent Analysis Complete!")
+                        #     st.markdown("### Analysis Results:")
+                        #     st.markdown(result)
+                            
+                        #     if "response_time_ms" in response.json():
+                        #         response_time = response.json()["response_time_ms"]
+                        #         st.caption(f"Response time: {response_time/1000:.2f} seconds")
+                        
+                        # else:
+                        #     status_placeholder.empty()
+                        #     error_detail = response.json().get("detail", response.text) if response.headers.get("content-type") == "application/json" else response.text
+                            
+                        #     if "model" in error_detail and "not found" in error_detail:
+                        #         st.error("Model is loading for the first time. This may take 1-2 minutes. Please try again.")
+                        #         st.info("Tip: The first request to each model takes longer as it loads into memory.")
+                        #     else:
+                        #         st.error(f"Error {response.status_code}: {error_detail}")
                         
                         if response.status_code == 200:
                             result = response.json()
-                            st.success("Agent Analysis Complete!")
                             
                             # Display results
                             agent_responses = result.get("agent_responses", {})
@@ -382,8 +416,12 @@ elif chat_mode == "🤖 AI Agent Simulation":
                             st.error(f"Error {response.status_code}: {error_detail}")
                             
                     except requests.exceptions.Timeout:
-                        st.error("Analysis timed out. Try with shorter content or fewer agents.")
+                        status_placeholder.empty()
+                        st.error("Request timed out. The model might be loading - please try again in a moment.")
+                        st.info("Large models can take 1-2 minutes to load on first use.")
+                        # st.error("Analysis timed out. Try with shorter content or fewer agents.")
                     except Exception as e:
+                        status_placeholder.empty()
                         st.error(f"Analysis failed: {str(e)}")
 
         st.markdown("---")
@@ -503,7 +541,9 @@ elif chat_mode == "🤖 AI Agent Simulation":
                     
                     # Start the debate
                     with st.spinner(f"🗣️ {len(sequence_agent_ids)} agents are debating..."):
+                        status_placeholder = st.empty()
                         try:
+                            status_placeholder.info("Connecting to debate service...")
                             response = requests.post(endpoint, json=debate_payload, timeout=300)
                             
                             if response.status_code == 200:
@@ -524,7 +564,7 @@ elif chat_mode == "🤖 AI Agent Simulation":
                                         agent_name = round_result.get('agent_name', 'Unknown Agent')
                                         response_text = round_result.get("response", "No response")
                                         
-                                        with st.expander(f"Round {i}: 🤖 {agent_name}", expanded=i<=2):
+                                        with st.expander(f"Round {i}: {agent_name}", expanded=i<=2):
                                             st.markdown(response_text)
                                             
                                             # Show metadata if available
@@ -540,7 +580,7 @@ elif chat_mode == "🤖 AI Agent Simulation":
                                         agent_name = analysis.get("agent_name", f"Agent {idx}")
                                         reason = analysis.get("reason", analysis.get("raw_text", "No analysis"))
                                         
-                                        with st.expander(f"🤖 {agent_name}", expanded=True):
+                                        with st.expander(f"{agent_name}", expanded=True):
                                             st.markdown(reason)
                                 
                                 elif "agent_responses" in result:
@@ -557,15 +597,18 @@ elif chat_mode == "🤖 AI Agent Simulation":
                                     
                             else:
                                 error_detail = response.json().get("detail", response.text) if response.headers.get("content-type") == "application/json" else response.text
-                                st.error(f"❌ Error {response.status_code}: {error_detail}")
+                                st.error(f"Error {response.status_code}: {error_detail}")
                                 
                         except requests.exceptions.Timeout:
-                            st.error("⏱️ Debate timed out. This can happen with long content or many agents.")
+                            status_placeholder.empty()
+                            st.error("Request timed out. The model might be loading - please try again in a moment.")
+                            st.info("Large models can take 1-2 minutes to load on first use.")
                         except Exception as e:
-                            st.error(f"❌ Debate failed: {str(e)}")
+                            status_placeholder.empty()
+                            st.error(f"Debate failed: {str(e)}")
 
         # Help section
-        with st.expander("❓ How Multi-Agent Debate Works"):
+        with st.expander("How Multi-Agent Debate Works"):
             st.markdown("""
             **Multi-Agent Debate Process:**
             
@@ -576,9 +619,9 @@ elif chat_mode == "🤖 AI Agent Simulation":
             5. **Optional RAG**: Choose a collection to provide additional context
             
             **Example Sequence:**
-            - Contract Risk Analyzer (Llama3) → Identifies risks
-            - Compliance Checker (LLama3) → Reviews compliance
-            - Legal Research Assistant (Llama3) → Provides legal context
+            - Risk Analyzer (Llama3) → Identifies risks
+            - Systems Engineer (LLama3) → Reviews requirements
+            - Test Engineer (Llama3) → Provides test context
             
             **Why this is better than selecting models again:**
             - Agents already have optimized LLM+prompt combinations
@@ -612,7 +655,7 @@ elif chat_mode == "🛠️ Create Agent":
     # Agent management sub-modes
     agent_mode = st.radio(
         "Select Action:",
-        ["🆕 Create New Agent", "🔧 Manage Existing Agents"],
+        ["Create New Agent", "Manage Existing Agents"],
         horizontal=True
     )
     
@@ -674,7 +717,7 @@ elif chat_mode == "🛠️ Create Agent":
                 "max_tokens": 2000
             },
             
-            "System Test Engineer Agent": {
+            "Test Engineering Agent": {
                 "description": "Expert system test engineer specializing in comprehensive test case development, test plan review, and verification strategy across complex integrated systems",
                 "system_prompt": """You are a senior system test engineer with 12+ years of experience in developing and executing test strategies for complex integrated systems across aerospace, automotive, telecommunications, and enterprise software domains. Your expertise encompasses the full testing lifecycle from planning through execution and reporting. Your role is to:
 
@@ -840,7 +883,8 @@ elif chat_mode == "🛠️ Create Agent":
                         model_status[model] = "degraded"
                 
                 selected_model_display = st.selectbox("Select Model", model_options)
-                agent_model_name = selected_model_display.split(" ", 1)[1]  # Remove status emoji
+                split_parts = selected_model_display.split(" ", 1)
+                agent_model_name = split_parts[1] if len(split_parts) > 1 else split_parts[0]
                 
                 # Display model information
                 if agent_model_name in model_descriptions:
@@ -1010,9 +1054,6 @@ elif chat_mode == "🛠️ Create Agent":
                                 # Clear session state to force refresh
                                 st.session_state.agents_data = []
                                 
-                                # Success celebration
-                                st.balloons()
-                                
                                 # Quick action suggestions
                                 st.markdown("**Next Steps:**")
                                 st.markdown("- Switch to '🤖 AI Agent Simulation' mode to test your new agent")
@@ -1037,7 +1078,7 @@ elif chat_mode == "🛠️ Create Agent":
     # ----------------------------------------------------------------------
     # MANAGE EXISTING AGENTS SUB-MODE
     # ----------------------------------------------------------------------
-    elif agent_mode == "🔧 Manage Existing Agents":
+    elif agent_mode == "Manage Existing Agents":
         st.subheader("Manage Existing Legal Agents")
         
         # Load agents with enhanced error handling

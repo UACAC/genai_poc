@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 
+from langchain_core.messages import HumanMessage
 from chromadb import Client
 from chromadb.config import Settings
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -27,7 +28,6 @@ from services.database import (
 
 class RAGService:
     def __init__(self):
-        # FIXED: Use the same API endpoint as your Streamlit app
         self.chromadb_api_url = os.getenv("CHROMA_URL", "http://localhost:8020")
         self.embedding_function = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
         self.n_results = int(os.getenv("N_RESULTS", "5"))
@@ -294,6 +294,7 @@ class RAGService:
         else:
             raise ValueError(f"Unsupported model: {model_name}")
 
+        
     def process_agent_with_rag(self, agent: Dict[str, Any], query_text: str, collection_name: str, session_id: str, db: Session) -> Dict[str, Any]:
         """Process query with agent using RAG via API"""
         start_time = time.time()
@@ -328,46 +329,46 @@ INSTRUCTIONS:
                 
                 formatted_user_prompt = agent["user_prompt_template"].replace("{data_sample}", enhanced_content)
                 
-                prompt = ChatPromptTemplate.from_messages([
-                    ("system", agent["system_prompt"]),
-                    ("human", formatted_user_prompt)
-                ])
+                full_prompt = f"{agent['system_prompt']}\n\n{formatted_user_prompt}"
                 
-                chain = prompt | llm | StrOutputParser()
-                response = chain.invoke({})
+                # Use direct LLM invoke (like chat endpoint)
+                from langchain_core.messages import HumanMessage
+                response = llm.invoke([HumanMessage(content=full_prompt)])
+                
+                # Handle both response types
+                if hasattr(response, 'content'):
+                    final_response = response.content
+                else:
+                    final_response = str(response)
                 
                 response_time_ms = int((time.time() - start_time) * 1000)
                 processing_method = f"rag_enhanced_{agent['model_name']}"
                 
-                # rag_info = f"\n\n---\n**RAG Information**: Used {len(relevant_docs)} relevant documents from collection '{collection_name}' with {agent['model_name']} model."
-                rag_info = f"\n\n---\n**RAG Information**: Used {len(relevant_docs)} relevant documents from collection '{collection_name}' with {agent['model_name']} model.\n\n**Retrieved Document Previews:**\n"
-
-                for i, doc in enumerate(relevant_docs, 1):
-                    preview = doc[:800] + "..." if len(doc) > 800 else doc
-                    rag_info += f"\nSource {i} Preview:\n{preview}\n"
-
-                final_response = response + rag_info
+                rag_info = f"\n\n---\n**RAG Information**: Used {len(relevant_docs)} relevant documents from collection '{collection_name}' with {agent['model_name']} model."
+                final_response = final_response + rag_info
                 
             else:
                 print(f"Using Direct LLM mode - no relevant documents found")
                 
                 formatted_user_prompt = agent["user_prompt_template"].replace("{data_sample}", query_text)
+                full_prompt = f"{agent['system_prompt']}\n\n{formatted_user_prompt}"
                 
-                prompt = ChatPromptTemplate.from_messages([
-                    ("system", agent["system_prompt"]),
-                    ("human", formatted_user_prompt)
-                ])
+                # Use direct LLM invoke
+                from langchain_core.messages import HumanMessage
+                response = llm.invoke([HumanMessage(content=full_prompt)])
                 
-                chain = prompt | llm | StrOutputParser()
-                response = chain.invoke({})
+                # Handle both response types
+                if hasattr(response, 'content'):
+                    final_response = response.content
+                else:
+                    final_response = str(response)
                 
                 response_time_ms = int((time.time() - start_time) * 1000)
                 processing_method = f"direct_{agent['model_name']}"
                 
                 direct_info = f"\n\n---\n**Direct LLM Information**: No relevant documents found in collection '{collection_name}'. Used {agent['model_name']} model directly."
-                final_response = response + direct_info
+                final_response = final_response + direct_info
             
-            # Log the response (remove the problematic rag_context for now)
             log_agent_response(
                 session_id=session_id,
                 agent_id=agent["id"],

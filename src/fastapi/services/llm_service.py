@@ -226,13 +226,6 @@ class LLMService:
             return debate_agents
         finally:
             session.close()
-    
-    def get_legal_models(self):
-        """Return available legal models."""
-        return {
-            "openai_models": ["gpt-4", "gpt-3.5-turbo"],
-            "ollama_models": ["llama3"]
-        }
 
     def health_check(self):
         """Check service health and model availability."""
@@ -256,7 +249,7 @@ class LLMService:
             health_status["status"] = "degraded"
         
         # Test available models
-        for model in ["gpt-4","gpt-3.5-turbo", "llama3"]:
+        for model in ["gpt-4", "gpt-3.5-turbo", "llama3"]:
             try:
                 llm = self.get_llm_service(model)
                 health_status["models"][model] = "available"

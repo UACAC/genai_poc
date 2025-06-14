@@ -42,6 +42,7 @@ def fetch_collections():
     except Exception as e:
         print(f"Error fetching collections: {e}")
         return []
+    
 def get_available_models():
     """Get available models from the API - this was missing!"""
     try:
@@ -56,20 +57,6 @@ def get_available_models():
                 if available_models:
                     return available_models
         
-        # Fallback: try legal-models endpoint
-        response = requests.get(f"{LLM_API}/legal-models", timeout=10)
-        if response.status_code == 200:
-            legal_models_data = response.json()
-            all_models = []
-            if "legal_models" in legal_models_data:
-                models_dict = legal_models_data["legal_models"]
-                if "openai_models" in models_dict:
-                    all_models.extend(models_dict["openai_models"])
-                if "ollama_models" in models_dict:
-                    all_models.extend(models_dict["ollama_models"])
-                if all_models:
-                    return all_models
-                    
     except Exception as e:
         print(f"Error fetching models: {e}")
     
@@ -92,11 +79,11 @@ def check_model_availability():
             response = requests.post(f"{LLM_API}/chat", json=test_payload, timeout=30)
             if response.status_code == 200:
                 available_models.append(model)
-                print(f"✅ {model} is available")
+                print(f"{model} is available")
             else:
-                print(f"❌ {model} failed: {response.status_code}")
+                print(f"{model} failed: {response.status_code}")
         except Exception as e:
-            print(f"❌ {model} error: {e}")
+            print(f"{model} error: {e}")
     
     return available_models
 

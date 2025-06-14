@@ -6,7 +6,6 @@ import os
 
 torch.classes.__path__ = [] 
 
-# FIXED: Use environment variable for ChromaDB endpoint
 # This will resolve to the service discovery DNS name in AWS
 CHROMADB_API = os.getenv("CHROMA_URL", "http://localhost:8020")
 

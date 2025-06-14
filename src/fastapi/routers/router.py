@@ -66,7 +66,6 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
             start_time = time.time()
             llm = llm_service.get_llm_service(request.model)
             
-            # FIXED: Handle both response types
             response = llm.invoke([HumanMessage(content=request.query)])
             
             # OllamaLLM returns string directly, ChatOpenAI returns object with .content
@@ -483,14 +482,6 @@ async def toggle_agent_status(agent_id: int, db: Session = Depends(get_db)):
             status_code=500,
             detail=f"Failed to toggle agent status: {str(e)}"
         )
-
-@router.get("/legal-models")
-async def get_legal_models():
-    try:
-        models = llm_service.get_legal_models()
-        return {"legal_models": models}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/health")
 async def health_check():
