@@ -31,7 +31,7 @@ class AgentService:
         try:
             from services.llm_service import LLMService
             self.llm_service = LLMService()
-            print("✅ Using LLMService (same as Direct Chat)")
+            print("Using LLMService (same as Direct Chat)")
             
             # Test that it works
             test_llm = self.llm_service.get_llm_service("llama3")
@@ -110,7 +110,7 @@ class AgentService:
                     "user_prompt_template": agent.user_prompt_template
                 })
                 
-            print(f"✅ Loaded {len(self.compliance_agents)} agents")
+            print(f"Loaded {len(self.compliance_agents)} agents")
         finally:
             session.close()
 

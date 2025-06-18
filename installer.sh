@@ -269,17 +269,17 @@ EOL
 
 cat > "$CURRENT_DIR/stop.sh" <<EOL
 #!/bin/bash
-# Enhanced Legal AI system shutdown script
+# Enhanced AI system shutdown script
 
 cd "\$(dirname "\$0")"
 
-echo "Stopping Legal AI Validation System..."
+echo "Stopping AI Validation System..."
 $DOCKER_COMPOSE_CMD down
 
 echo "🧹 Cleaning up..."
 docker system prune -f --volumes 2>/dev/null || true
 
-echo "Legal AI system stopped and cleaned up."
+echo "AI system stopped and cleaned up."
 echo "Data preserved in ./data/ directory"
 echo "To restart: ./start.sh"
 EOL
@@ -328,13 +328,13 @@ echo ""
 echo "AI Installation complete!"
 echo ""
 echo "Available commands:"
-echo "   • ./start.sh    - Start the Legal AI system"
-echo "   • ./stop.sh     - Stop the Legal AI system"
+echo "   • ./start.sh    - Start the AI system"
+echo "   • ./stop.sh     - Stop the AI system"
 echo "   • ./models.sh   - Manage AI models"
 echo ""
 
 
-read -p "Start Legal AI system now? (y/n): " start_now
+read -p "Start AI system now? (y/n): " start_now
 if [[ "$start_now" =~ ^[Yy]$ ]]; then
     "$CURRENT_DIR/start.sh"
 fi

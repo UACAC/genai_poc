@@ -94,7 +94,7 @@ class LLMService:
     def verify_rag(self, agent: Dict[str, Any], query_text: str, collection_name: str, db: Session, session_id: Optional[str] = None):
         model_name = agent["model_name"]
         raw_text, response_time_ms = self.query_model(model_name, query_text, collection_name, query_type="rag", session_id=session_id)
-        # lines = raw_text.split("\n", 1)
+        lines = raw_text.split("\n", 1)
         
         # first_line = lines[0].lower()
 
@@ -105,7 +105,7 @@ class LLMService:
         # else:
         #     compliant = None
 
-        # reason = lines[1].strip() if len(lines) > 1 else ""
+        reason = lines[1].strip() if len(lines) > 1 else ""
 
         log_compliance_result(
             agent_id=agent["id"],
