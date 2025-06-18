@@ -14,7 +14,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks:
-      - legal_ai_network
+      - ai_network
 
   chromadb:
     build:
@@ -28,7 +28,7 @@ services:
     volumes:
       - chromadata:/app/chroma_db_data
     networks:
-      - legal_ai_network
+      - ai_network
 
   ollama:
     build:
@@ -41,7 +41,7 @@ services:
     volumes:
       - ollama_models:/root/.ollama
     networks:
-      - legal_ai_network
+      - ai_network
 
   fastapi:
     build:
@@ -61,7 +61,7 @@ services:
       - ./src/fastapi/poetry.lock:/app/poetry.lock
       - huggingface_cache:/app/huggingface_cache
     networks:
-      - legal_ai_network
+      - ai_network
 
   streamlit:
     build:
@@ -76,10 +76,10 @@ services:
       - ./src/streamlit/pyproject.toml:/app/pyproject.toml
       - ./src/streamlit/poetry.lock:/app/poetry.lock
     networks:
-      - legal_ai_network
+      - ai_network
 
 networks:
-  legal_ai_network:
+  ai_network:
     driver: bridge
 
 volumes:
