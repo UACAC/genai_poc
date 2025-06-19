@@ -14,18 +14,9 @@ OPENAI_API_KEY = os.getenv("OPEN_AI_API_KEY")
 
 # Available models
 AVAILABLE_MODELS = {
-    "OpenAI Models": {
-        "gpt-4": "GPT-4 (Most capable)",
-        "gpt-3.5-turbo": "GPT-3.5 Turbo (Fast and efficient)"
-    },
-    "Ollama Models": {
-        "llama3": "Llama 3 (Open source)",
-        "llama3:8b": "Llama 3 8B (Open source)",
-        "llama": "Llama (Open source)"
-    },
-    "No LLM": {
-        "none": "No LLM (Basic extraction only)"
-    }
+    "gpt-4": "GPT-4 (Most capable)",
+    "gpt-3.5-turbo": "GPT-3.5 Turbo (Fast and efficient)",
+    "llama3": "LLaMA 3 (Open source)"
 }
 
 # Add connection debugging
@@ -58,70 +49,28 @@ with st.sidebar:
     if connected:
         st.success("ChromaDB Connected")
         
-        # Show health details in expander
-        with st.expander("Service Details"):
-            if health_data:
-                st.write(f"**MarkItDown**: {'✅' if health_data.get('markitdown_available') else '❌'}")
-                st.write(f"**OpenAI**: {'✅' if health_data.get('openai_available') else '❌'}")
-                st.write(f"**Embedding Model**: {health_data.get('embedding_model', 'Unknown')}")
-                st.write(f"**Supported Formats**: {', '.join(health_data.get('supported_formats', []))}")
     else:
         st.error("ChromaDB Disconnected")
         st.info(f"Trying to connect to: {CHROMADB_API}")
     
     # Model Selection in Sidebar
     st.subheader("Model Configuration")
-    
-    # Check if OpenAI is available
-    if OPENAI_API_KEY:
-        st.success("✅ OpenAI API Key found in environment")
-        default_category = "OpenAI Models"
-    else:
-        st.warning("⚠️ No OpenAI API Key in environment")
-        st.info("Using Ollama models or basic extraction")
-        default_category = "Ollama Models"
-    
-    # Model type selection
-    model_category = st.selectbox(
-        "Select Model Type",
-        list(AVAILABLE_MODELS.keys()),
-        index=list(AVAILABLE_MODELS.keys()).index(default_category)
-    )
-    
-    # Model selection based on category
     selected_model = st.selectbox(
-        "Select Model",
-        list(AVAILABLE_MODELS[model_category].keys()),
-        format_func=lambda x: f"{x} - {AVAILABLE_MODELS[model_category][x]}"
+        "Select a model",
+        options=list(AVAILABLE_MODELS.keys()),
+        format_func=lambda x: f"{x} - {AVAILABLE_MODELS[x]}"
     )
-    
-    # Show warning if OpenAI model selected but no key
-    if model_category == "OpenAI Models" and not OPENAI_API_KEY:
-        st.error("⚠️ OpenAI models require API key in environment variable OPEN_AI_API_KEY")
+
+    # Warn if OpenAI model selected but key missing
+    if selected_model in ["gpt-4", "gpt-3.5-turbo"] and not OPENAI_API_KEY:
+        st.error("You selected an OpenAI model but did not provide `OPEN_AI_API_KEY` in your environment.")
+
 
 # ---- COLLECTION MANAGEMENT ----
 st.header("Manage Collections")
 collections = fetch_collections()
 col1, col2 = st.columns(2)
 
-# Debugging information in sidebar
-with st.sidebar:
-    st.header("Debug Info")
-    try:
-        # Test ChromaDB direct
-        response = requests.get(f"{CHROMADB_API}/collections", timeout=5)
-        st.sidebar.write(f"ChromaDB Status: {response.status_code}")
-        st.sidebar.write(f"Raw Response: {response.text}")
-        
-        # Test fetch_collections function
-        collections = fetch_collections()
-        st.sidebar.write(f"Parsed Collections: {collections}")
-        
-        # Show selected model
-        st.sidebar.write(f"Selected Model: {selected_model}")
-        st.sidebar.write(f"OpenAI Available: {'Yes' if OPENAI_API_KEY else 'No'}")
-    except Exception as e:
-        st.sidebar.error(f"Debug Error: {str(e)}")
 
 # List existing collections
 with col1:
@@ -172,9 +121,6 @@ if collections:
     if uploaded_files and st.button("Process & Store Documents"):
         # Check if we can proceed with selected model
         can_proceed = True
-        if model_category == "OpenAI Models" and not OPENAI_API_KEY:
-            st.error("Cannot use OpenAI models without API key. Please select a different model or set OPEN_AI_API_KEY environment variable.")
-            can_proceed = False
         
         if can_proceed:
             try:

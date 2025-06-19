@@ -16,32 +16,17 @@ LLM_API = os.getenv("LLM_API", "http://localhost:9020")  # Add this
 embedding_model = SentenceTransformer('multi-qa-mpnet-base-dot-v1')
 
 def fetch_collections():
-    """Fetch collections from ChromaDB with caching"""
     try:
-        chroma_url = CHROMADB_API
-        response = requests.get(f"{chroma_url}/collections", timeout=10)
-        if response.status_code == 200:
-            collections_data = response.json()
-            
-            # Handle new response format with "collections" key
-            if isinstance(collections_data, dict) and "collections" in collections_data:
-                collections = collections_data["collections"]
-                print(f"Found collections (new format): {collections}")
-                return collections if isinstance(collections, list) else []
-            # Handle old format (direct list) - fallback
-            elif isinstance(collections_data, list):
-                print(f"Found collections (old format): {collections_data}")
-                return collections_data
-            else:
-                print(f"Unexpected response format: {collections_data}")
-                return []
-        else:
-            print(f"Failed to fetch collections: {response.status_code}")
-            print(f"Response text: {response.text}")
-            return []
-    except Exception as e:
-        print(f"Error fetching collections: {e}")
+        response = requests.get(f"{CHROMADB_API}/collections", timeout=10)
+        print("STATUS:", response.status_code)
+        print("TEXT:", response.text)
+        response.raise_for_status()
+        return response.json().get("collections", [])
+    except requests.exceptions.RequestException as e:
+        print(f"Fetch collections failed: {e}")
         return []
+
+
     
 def get_available_models():
     """Get available models from the API - this was missing!"""

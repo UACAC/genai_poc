@@ -35,7 +35,7 @@ langchain-huggingface = "^0.1.2"
 torch = "2.2.2"
 langchain-ollama = "^0.3.3"
 numpy = "<2.0"
-markitdown = "^0.1.2"
+markitdown = {extras = ["pdf"], version = "^0.1.2"}
 pillow = "^11.2.1"
 pandas = "^2.3.0"
 openpyxl = "^3.1.5"

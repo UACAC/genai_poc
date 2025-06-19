@@ -42,11 +42,13 @@ chroma_client = Client(settings)
 # Initialize embedding model and MarkItDown
 embedding_model = SentenceTransformer('multi-qa-mpnet-base-dot-v1')
 
+open_api_key = os.getenv("OPENAI_API_KEY")
+
 # Image storage directory
 IMAGES_DIR = os.getenv("IMAGES_STORAGE_DIR", "/app/stored_images")
 os.makedirs(IMAGES_DIR, exist_ok=True)
 
-def get_markitdown_instance(model_name="none", openai_api_key=None):
+def get_markitdown_instance(model_name="none", openai_api_key=open_api_key):
     """
     Create a MarkItDown instance based on model selection
     """
@@ -91,7 +93,7 @@ def get_markitdown_instance(model_name="none", openai_api_key=None):
 
 # Create a standard FastAPI app
 app = FastAPI(title="ChromaDB Dockerized")
-
+md = get_markitdown_instance("none")
 
 def extract_and_store_images_from_pdf(file_content: bytes, filename: str, temp_dir: str, doc_id: str, md) -> List[Dict]:
     """Extract images from PDF and store them with metadata"""
@@ -268,7 +270,7 @@ def health_check():
     return {
         "status": "ok",
         "markitdown_available": md is not None,
-        "openai_available": openai_api_key is not None,
+        "openai_available": open_api_key is not None,
         "supported_formats": ["pdf", "docx", "xlsx", "csv", "txt", "pptx", "html"],
         "embedding_model": "multi-qa-mpnet-base-dot-v1",
         "images_directory": IMAGES_DIR
@@ -279,31 +281,13 @@ def health_check():
 
 @app.get("/collections")
 def list_collections():
-    """
-    List all ChromaDB collections (returns the list of names).
-    """
     try:
-        collections = chroma_client.list_collections()
-        logger.info(f"Raw collections response: {collections}")
-        
-        # Handle different ChromaDB versions
-        if isinstance(collections, list):
-            if len(collections) > 0 and hasattr(collections[0], 'name'):
-                # Collections are objects with .name attribute
-                collection_names = [col.name for col in collections]
-            else:
-                # Collections are already strings
-                collection_names = collections
-        else:
-            # Fallback for unexpected return types
-            collection_names = []
-            
-        logger.info(f"Returning collection names: {collection_names}")
+        collection_names = chroma_client.list_collections()  # Now returns just names
         return {"collections": collection_names}
-        
     except Exception as e:
-        logger.error(f"Error listing collections: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error listing collections: {str(e)}")
+        logger.error(f"Error listing collections: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list collections")
+
 
 
 @app.post("/collection/create")
@@ -313,14 +297,7 @@ def create_collection(collection_name: str = Query(...)):
     """
     try:
         # Get existing collection names safely
-        existing_collections = chroma_client.list_collections()
-        existing_names = []
-        
-        if isinstance(existing_collections, list):
-            if len(existing_collections) > 0 and hasattr(existing_collections[0], 'name'):
-                existing_names = [col.name for col in existing_collections]
-            else:
-                existing_names = existing_collections
+        existing_names = chroma_client.list_collections()
         
         if collection_name in existing_names:
             raise HTTPException(
@@ -346,14 +323,7 @@ def get_collection_info(collection_name: str = Query(...)):
     """
     try:
         # Check if collection exists
-        existing_collections = chroma_client.list_collections()
-        existing_names = []
-        
-        if isinstance(existing_collections, list):
-            if len(existing_collections) > 0 and hasattr(existing_collections[0], 'name'):
-                existing_names = [col.name for col in existing_collections]
-            else:
-                existing_names = existing_collections
+        existing_names = chroma_client.list_collections()
                 
         if collection_name not in existing_names:
             raise HTTPException(
@@ -361,7 +331,7 @@ def get_collection_info(collection_name: str = Query(...)):
                 detail=f"Collection '{collection_name}' not found."
             )
         
-        collection = chroma_client.get_collection(collection_name)
+        collection = chroma_client.get_collection(name=collection_name)
         return {"name": collection.name}
         
     except HTTPException:
@@ -379,15 +349,9 @@ def delete_collection(collection_name: str = Query(...)):
     try:
         # Get existing collection names safely
         existing_collections = chroma_client.list_collections()
-        existing_names = []
-        
-        if isinstance(existing_collections, list):
-            if len(existing_collections) > 0 and hasattr(existing_collections[0], 'name'):
-                existing_names = [col.name for col in existing_collections]
-            else:
-                existing_names = existing_collections
 
-        if collection_name not in existing_names:
+
+        if collection_name not in existing_collections:
             raise HTTPException(
                 status_code=404,
                 detail=f"Collection '{collection_name}' not found."
@@ -411,14 +375,7 @@ def edit_collection_name(old_name: str = Query(...), new_name: str = Query(...))
     """
     try:
         # Get existing collection names
-        existing_collections = chroma_client.list_collections()
-        existing_names = []
-        
-        if isinstance(existing_collections, list):
-            if len(existing_collections) > 0 and hasattr(existing_collections[0], 'name'):
-                existing_names = [col.name for col in existing_collections]
-            else:
-                existing_names = existing_collections
+        existing_names = chroma_client.list_collections()
 
         if old_name not in existing_names:
             raise HTTPException(
@@ -433,10 +390,10 @@ def edit_collection_name(old_name: str = Query(...), new_name: str = Query(...))
             )
 
         # Retrieve the old collection
-        collection = chroma_client.get_collection(old_name)
+        collection = chroma_client.get_collection(name=old_name)
 
         # Create a new collection with the new name
-        new_collection = chroma_client.create_collection(new_name)
+        new_collection = chroma_client.create_collection(name=new_name)
 
         # Retrieve all documents from the old collection
         old_docs = collection.get()
@@ -467,14 +424,7 @@ class DocumentAddRequest(BaseModel):
 def add_documents(req: DocumentAddRequest):
     try:
         # Check if the collection exists
-        existing_collections = chroma_client.list_collections()
-        existing_names = []
-        
-        if isinstance(existing_collections, list):
-            if len(existing_collections) > 0 and hasattr(existing_collections[0], 'name'):
-                existing_names = [col.name for col in existing_collections]
-            else:
-                existing_names = existing_collections
+        existing_names = chroma_client.list_collections()
                 
         if req.collection_name not in existing_names:
             raise HTTPException(
@@ -515,14 +465,7 @@ def remove_documents(req: DocumentRemoveRequest):
     """
     try:
         # Check if the collection exists first
-        existing_collections = chroma_client.list_collections()
-        existing_names = []
-        
-        if isinstance(existing_collections, list):
-            if len(existing_collections) > 0 and hasattr(existing_collections[0], 'name'):
-                existing_names = [col.name for col in existing_collections]
-            else:
-                existing_names = existing_collections
+        existing_names = chroma_client.list_collections()
                 
         if req.collection_name not in existing_names:
             raise HTTPException(
@@ -569,14 +512,7 @@ def edit_document(req: DocumentEditRequest):
     """
     try:
         # Check if the collection exists first
-        existing_collections = chroma_client.list_collections()
-        existing_names = []
-        
-        if isinstance(existing_collections, list):
-            if len(existing_collections) > 0 and hasattr(existing_collections[0], 'name'):
-                existing_names = [col.name for col in existing_collections]
-            else:
-                existing_names = existing_collections
+        existing_names = chroma_client.list_collections()
                 
         if req.collection_name not in existing_names:
             raise HTTPException(
@@ -618,20 +554,13 @@ def list_documents(collection_name: str = Query(...)):
     """
     try:
         # Check if the collection exists first
-        existing_collections = chroma_client.list_collections()
-        existing_names = []
-        
-        if isinstance(existing_collections, list):
-            if len(existing_collections) > 0 and hasattr(existing_collections[0], 'name'):
-                existing_names = [col.name for col in existing_collections]
-            else:
-                existing_names = existing_collections
+        existing_names = chroma_client.list_collections()
                 
         if collection_name not in existing_names:
             raise HTTPException(status_code=404, detail=f"Collection '{collection_name}' not found.")
 
         # Now, safely retrieve the collection
-        collection = chroma_client.get_collection(collection_name)
+        collection = chroma_client.get_collection(name=collection_name)
 
         # Retrieve documents
         docs = collection.get()
@@ -654,14 +583,7 @@ class DocumentQueryRequest(BaseModel):
 def query_documents(req: DocumentQueryRequest):
     try:
         # Check if the collection exists first
-        existing_collections = chroma_client.list_collections()
-        existing_names = []
-        
-        if isinstance(existing_collections, list):
-            if len(existing_collections) > 0 and hasattr(existing_collections[0], 'name'):
-                existing_names = [col.name for col in existing_collections]
-            else:
-                existing_names = existing_collections
+        existing_names = chroma_client.list_collections()
                 
         if req.collection_name not in existing_names:
             raise HTTPException(
@@ -708,14 +630,7 @@ async def upload_and_process_documents(
         md = get_markitdown_instance(model_name, openai_api_key)
         
         # Check if collection exists
-        existing_collections = chroma_client.list_collections()
-        existing_names = []
-        
-        if isinstance(existing_collections, list):
-            if len(existing_collections) > 0 and hasattr(existing_collections[0], 'name'):
-                existing_names = [col.name for col in existing_collections]
-            else:
-                existing_names = existing_collections
+        existing_names = chroma_client.list_collections()
                 
         if collection_name not in existing_names:
             raise HTTPException(
@@ -723,7 +638,7 @@ async def upload_and_process_documents(
                 detail=f"Collection '{collection_name}' not found."
             )
         
-        collection = chroma_client.get_collection(collection_name)
+        collection = chroma_client.get_collection(name=collection_name)
         processed_files = []
         total_chunks = 0
         total_images = 0
@@ -847,7 +762,7 @@ def reconstruct_document(document_id: str, collection_name: str = Query(...)):
     Reconstruct original document from stored chunks and images.
     """
     try:
-        collection = chroma_client.get_collection(collection_name)
+        collection = chroma_client.get_collection(name=collection_name)
         
         # Get all chunks for this document
         results = collection.get(
