@@ -14,9 +14,9 @@ OPENAI_API_KEY = os.getenv("OPEN_AI_API_KEY")
 
 # Available models
 AVAILABLE_MODELS = {
-    "gpt-4": "GPT-4 (Most capable)",
-    "gpt-3.5-turbo": "GPT-3.5 Turbo (Fast and efficient)",
-    "llama3": "LLaMA 3 (Open source)"
+    "gpt-4": "(Most capable)",
+    "gpt-3.5-turbo": "(Fast and efficient)",
+    "llama3": "(Open source)"
 }
 
 # Add connection debugging

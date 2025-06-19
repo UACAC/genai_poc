@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 echo "Stopping AI Validation System..."
 docker compose down
 
-echo "🧹 Cleaning up..."
+echo "Cleaning up..."
 docker system prune -f --volumes 2>/dev/null || true
 
 echo "AI system stopped and cleaned up."

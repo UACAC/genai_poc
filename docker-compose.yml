@@ -1,4 +1,9 @@
 services:
+  base-poetry-deps:
+    build:
+      context: .
+      dockerfile: Dockerfile.base
+    image: base-poetry-deps
   postgres:
     image: postgres:17
     container_name: postgres_db
@@ -25,6 +30,10 @@ services:
       - "8020:8020"
     environment:
       - CHROMADB_PERSIST_DIRECTORY=/app/chroma_db_data
+    env_file:
+      - .env
+    depends_on:
+      - base-poetry-deps
     volumes:
       - chromadata:/app/chroma_db_data
     networks:
@@ -46,13 +55,9 @@ services:
       - OLLAMA_KEEP_ALIVE=-1
       - OLLAMA_NUM_PARALLEL=1
       - OLLAMA_MAX_LOADED_MODELS=1
-    deploy:
-      resources:
-        limits:
-          memory: 6G
-        reservations:
-          memory: 4G
     restart: unless-stopped
+    mem_limit: 6g
+    mem_reservation: 4g
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
       interval: 30s
@@ -70,12 +75,11 @@ services:
     env_file:
       - .env
     depends_on:
+      - base-poetry-deps
       - postgres
       - chromadb
       - ollama
     volumes:
-      - ./src/fastapi/pyproject.toml:/app/pyproject.toml
-      - ./src/fastapi/poetry.lock:/app/poetry.lock
       - huggingface_cache:/app/huggingface_cache
     networks:
       - ai_network
@@ -89,9 +93,8 @@ services:
       - "8501:8501"
     env_file:
       - .env
-    volumes:
-      - ./src/streamlit/pyproject.toml:/app/pyproject.toml
-      - ./src/streamlit/poetry.lock:/app/poetry.lock
+    depends_on:
+      - base-poetry-deps
     networks:
       - ai_network
 

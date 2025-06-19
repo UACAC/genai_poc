@@ -45,7 +45,7 @@ embedding_model = SentenceTransformer('multi-qa-mpnet-base-dot-v1')
 open_api_key = os.getenv("OPENAI_API_KEY")
 
 # Image storage directory
-IMAGES_DIR = os.getenv("IMAGES_STORAGE_DIR", "/app/stored_images")
+IMAGES_DIR = os.path.join(os.getcwd(), "stored_images")
 os.makedirs(IMAGES_DIR, exist_ok=True)
 
 def get_markitdown_instance(model_name="none", openai_api_key=open_api_key):
