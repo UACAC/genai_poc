@@ -128,58 +128,52 @@ def extract_text_from_docx(docx_path):
     sections = [section.strip() for section in sections if section.strip()]
     return sections
 
-def store_files_in_chromadb(uploaded_files, collection_name, distance_metric="cosine"):
-    """Stores documents (.pdf, .docx, .txt) in ChromaDB by extracting and embedding text sections."""
-    # Ensure the collection exists
-    requests.post(f"{CHROMADB_API}/collection/create", params={"collection_name": collection_name})
-
-    for uploaded_file in uploaded_files:
-        file_extension = uploaded_file.name.lower().split('.')[-1]
-        temp_file_path = ""
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_extension}") as temp_file:
-            temp_file.write(uploaded_file.getvalue())
-            temp_file_path = temp_file.name
-
-        if file_extension == "pdf":
-            sections = extract_sections_from_pdf(temp_file_path)
-        elif file_extension == "txt":
-            sections = extract_text_from_txt(temp_file_path)
-        elif file_extension == "docx":
-            sections = extract_text_from_docx(temp_file_path)
-        else:
-            print(f"Unsupported file type: {file_extension}")
-            os.remove(temp_file_path)
-            continue
-
-        if not sections:
-            print(f"No text extracted from {uploaded_file.name}. Skipping storage.")
-            os.remove(temp_file_path)
-            continue
-
-        embeddings = embedding_model.encode(sections).tolist()
-        print("Embedding dimension:", len(embeddings[0]))  # Should print 768
-
-        # Prepare metadata and IDs
-        metadatas = [{"document_name": uploaded_file.name} for _ in range(len(sections))]
-        ids = [f"{uploaded_file.name}_section_{i}" for i in range(len(sections))]
-
-        payload = {
-            "collection_name": collection_name,
-            "documents": sections,
-            "ids": ids,
-            "metadatas": metadatas,
-            "embeddings": embeddings
-        }
-        response = requests.post(f"{CHROMADB_API}/documents/add", json=payload)
-
-        # Cleanup temporary file
-        os.remove(temp_file_path)
-
-        if response.status_code == 200:
-            print(f"Stored {uploaded_file.name} in collection '{collection_name}'.")
-        else:
-            print(f"Error storing {uploaded_file.name}: {response.json()}")
+def store_files_in_chromadb(
+    files, 
+    collection_name, 
+    model_name="none",
+    openai_api_key=None,
+    chunk_size=1000,
+    chunk_overlap=200,
+    store_images=True
+):
+    """
+    Store files in ChromaDB with model configuration
+    """
+    # Prepare the files for multipart upload
+    files_data = []
+    for file in files:
+        files_data.append(
+            ('files', (file.name, file.getvalue(), file.type))
+        )
+    
+    # Prepare parameters
+    params = {
+        "collection_name": collection_name,
+        "chunk_size": chunk_size,
+        "chunk_overlap": chunk_overlap,
+        "store_images": store_images,
+        "model_name": model_name
+    }
+    
+    # Add OpenAI API key to headers if provided
+    headers = {}
+    if openai_api_key and model_name in ["gpt-4", "gpt-3.5-turbo"]:
+        headers["X-OpenAI-API-Key"] = openai_api_key
+    
+    # Make the request to ChromaDB API
+    response = requests.post(
+        f"{CHROMADB_API}/documents/upload-and-process",
+        params=params,
+        files=files_data,
+        headers=headers,
+        timeout=300  # 5 minutes for large files
+    )
+    
+    if response.status_code != 200:
+        raise Exception(f"Failed to store documents: {response.text}")
+    
+    return response.json()
 
 def list_all_chunks_with_scores(collection_name, query_text=None):
     """Lists all stored document sections in a ChromaDB collection with optional query scores."""

@@ -1,10 +1,8 @@
 import os
 import time
-
 from typing import Optional, Dict, Any
 from datetime import datetime, timezone
 from sqlalchemy import Index
-
 from sqlalchemy import (
     create_engine, Column, Integer, String, DateTime, ForeignKey,
     Text, Float, Boolean, JSON, Enum
@@ -24,10 +22,10 @@ def get_database_url() -> str:
     Updated to work with AWS Secrets Manager variable names.
     """
     # Option 1: Direct DATABASE_URL (preferred for simplicity)
-    database_url = os.getenv("DATABASE_URL")
-    if database_url:
-        print("Using direct DATABASE_URL from environment")
-        return database_url
+    # database_url = os.getenv("DATABASE_URL")
+    # if database_url:
+    #     print("Using direct DATABASE_URL from environment")
+    #     return database_url
     
     # Option 2: Component-based setup (AWS Secrets Manager style)
     db_username = os.getenv("DB_USERNAME", "postgres")

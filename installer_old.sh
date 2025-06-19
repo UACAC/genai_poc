@@ -1,5 +1,5 @@
 #!/bin/bash
-# Platform-agnostic GENAI Validation System setup
+# Platform-agnostic Legal GENAI Validation System setup
 
 # Configuration
 REPO_URL="https://github.com/martinmanuel9/dis_verification_genai"
@@ -59,7 +59,7 @@ mkdir -p "$CURRENT_DIR/logs"
 
 GENERAL_MODELS=("llama3")
 
-# Function to download models with better error handling
+# Function to download models
 download_models() {
     local models=("$@")
     local category=$1
@@ -71,12 +71,10 @@ download_models() {
     LOGS_DIR="$CURRENT_DIR/logs"
     MODEL_DIR="$CURRENT_DIR/models"
 
-    echo "Creating optimized temporary Dockerfile for model download..."
+    echo "Creating temporary Dockerfile for model download..."
     cat > "$TEMP_DIR/Dockerfile" <<EOL
 FROM ollama/ollama:latest
 RUN apt-get update && apt-get install -y curl
-ENV OLLAMA_KEEP_ALIVE=-1
-ENV OLLAMA_NUM_PARALLEL=1
 WORKDIR /app
 ENTRYPOINT ["/bin/sh"]
 EOL
@@ -86,25 +84,26 @@ EOL
     for model in "${models[@]}"; do
         echo "Downloading $model..."
         
+        # Create safe filename for logs
         safe_model_name=$(echo "$model" | sed 's/:/_/g')
         
         docker run --rm -v "$MODEL_DIR:/root/.ollama" ollama-downloader -c '
-        export OLLAMA_KEEP_ALIVE=-1
-        export OLLAMA_NUM_PARALLEL=1
         ollama serve &
-        for i in {1..30}; do
+        for i in {1..15}; do
           if curl -s http://localhost:11434/version; then break; fi
-          echo "Waiting for Ollama to start..."; sleep 5
+          echo "Waiting for Ollama to start..."; sleep 3
         done &&
         echo "Pulling '"$model"'..." &&
-        timeout 600 ollama pull '"$model"' &&
+        ollama pull '"$model"' &&
         echo "Successfully pulled '"$model"'"
         ' 2>&1 | tee "$LOGS_DIR/${safe_model_name}_download.log"
 
+        # Check if download was successful
         if grep -q "Successfully pulled" "$LOGS_DIR/${safe_model_name}_download.log"; then
             echo "$model downloaded successfully."
         else
             echo "$model download may have failed. Check logs for details."
+            echo "Fallback: You can manually download with: docker exec ollama_container ollama pull $model"
         fi
     done
 
@@ -259,10 +258,10 @@ fi
 echo ""
 echo "AI system startup complete!"
 echo "Access points:"
-echo "   Streamlit UI: http://localhost:8501"
-echo "   FastAPI: http://localhost:9020"
-echo "   Ollama API: http://localhost:11434"
-echo "   ChromaDB: http://localhost:8020"
+echo "   • Streamlit UI: http://localhost:8501"
+echo "   • FastAPI: http://localhost:9020"
+echo "   • Ollama API: http://localhost:11434"
+echo "   • ChromaDB: http://localhost:8020"
 echo ""
 echo "To check logs: docker-compose logs -f [service_name]"
 echo "To stop system: ./stop.sh"
@@ -329,9 +328,9 @@ echo ""
 echo "AI Installation complete!"
 echo ""
 echo "Available commands:"
-echo "   ./start.sh    - Start the AI system"
-echo "   ./stop.sh     - Stop the AI system"
-echo "   ./models.sh   - Manage AI models"
+echo "   • ./start.sh    - Start the AI system"
+echo "   • ./stop.sh     - Stop the AI system"
+echo "   • ./models.sh   - Manage AI models"
 echo ""
 
 
