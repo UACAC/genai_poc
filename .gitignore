@@ -3,4 +3,5 @@ volumes/**
 data/**
 models/** 
 logs/**
+stored_images/**
 dis_pdu_src/data_operations/dis_synthetic_pdu/pdu_logs/** 

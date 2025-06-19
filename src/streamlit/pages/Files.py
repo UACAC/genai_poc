@@ -135,6 +135,33 @@ if collections:
                         chunk_overlap=chunk_overlap,
                         store_images=store_images
                     )
+                    
+                    results = store_files_in_chromadb(
+                        uploaded_files, 
+                        collection_name,
+                        model_name=selected_model,
+                        openai_api_key=OPENAI_API_KEY,
+                        chunk_size=chunk_size,
+                        chunk_overlap=chunk_overlap,
+                        store_images=store_images
+                    )
+
+                    st.success(f"Documents stored in collection '{collection_name}'!")
+                    with st.expander("Uploaded Document Details"):
+                        for doc in results.get("processed_files", []):
+                            if doc.get("status") == "success":
+                                st.markdown(f"""
+                                **{doc['filename']}**  
+                                - Status: {doc['status']}  
+                                - Document ID: `{doc['document_id']}`  
+                                - Chunks: {doc['chunks_created']}  
+                                - Images Stored: {doc['images_stored']}
+                                """)
+                            else:
+                                st.warning(f"{doc['filename']} — {doc.get('error', 'Unknown error')}")
+                        
+                        st.session_state['latest_doc_id'] = doc['document_id']
+
                 st.success(f"Documents stored in collection '{collection_name}'!")
                 
                 # Show what was used
@@ -173,7 +200,11 @@ if collections:
     
     with col1:
         reconstruct_collection = st.selectbox("Select Collection", collections, key="reconstruct_collection")
-        document_id = st.text_input("Document ID", placeholder="Enter the document ID to reconstruct")
+        document_id = st.text_input(
+            "Document ID",
+            placeholder="Enter the document ID to reconstruct",
+            value=st.session_state.get('latest_doc_id', "")
+        )
     
     with col2:
         if st.button("Reconstruct Document", disabled=not document_id):
@@ -212,9 +243,9 @@ if collections:
                             with col1:
                                 if img['exists']:
                                     # You could add image display here if needed
-                                    st.write(f"✅ {img['filename']}")
+                                    st.write(f"{img['filename']}")
                                 else:
-                                    st.write(f"❌ {img['filename']}")
+                                    st.write(f"{img['filename']}")
                             with col2:
                                 st.write(img['description'])
                                 
@@ -228,7 +259,7 @@ if collections:
 
 # Footer with additional info
 st.markdown("---")
-st.caption("💡 **Tips**: ")
+st.caption("**Tips**: ")
 st.caption("- OpenAI models provide better image descriptions and document understanding")
 st.caption("- Ollama models run locally and are good for privacy-sensitive content")
 st.caption("- Adjust chunk size based on your document types (smaller for detailed analysis, larger for overview)")

@@ -192,9 +192,12 @@ def list_all_chunks_with_scores(collection_name, query_text=None):
             }
 
     return [
-        {
+        {   
+            "Collection": collection_name,
+            "Document Name": metadata.get("document_name", "Unknown"),
+            "Document ID": doc_id,
             "Chunk ID": f"`{doc_id}`",
-            "Document": f">{doc_text[:250] + '...' if len(doc_text) > 250 else doc_text}",
+            "Document Text": f">{doc_text[:250] + '...' if len(doc_text) > 250 else doc_text}",
             "Metadata": f"**{(metadata or {}).get('document_name', 'Unknown')}**",
             "Score": scores_dict.get(doc_id, "N/A")
         }
