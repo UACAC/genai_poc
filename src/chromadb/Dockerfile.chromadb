@@ -2,9 +2,15 @@ FROM base-poetry-deps
 
 WORKDIR /app
 
+# Copy the source code
 COPY . .
 
+# Create the images directory
 RUN mkdir -p /app/stored_images
+
+RUN python -c "from markitdown import MarkItDown; print('MarkItDown import successful')"
+
+# No need to install markitdown-mcp again since it's already in base image
 
 EXPOSE 8020
 

@@ -1,6 +1,6 @@
 import os
 import uvicorn
-from fastapi import FastAPI, Query, HTTPException, Body
+from fastapi import FastAPI, Query, HTTPException
 from pydantic import BaseModel
 from chromadb.config import Settings
 from chromadb import Client
@@ -14,12 +14,7 @@ from typing import List, Optional, Dict, Any
 from fastapi import UploadFile, File, Response
 from sentence_transformers import SentenceTransformer
 from markitdown import MarkItDown
-from langchain_ollama import OllamaLLM
-from langchain_openai import ChatOpenAI
 from PyPDF2 import PdfReader
-from PIL import Image
-import pandas as p
-from io import BytesIO
 from fastapi import Request
 import logging
 
@@ -41,61 +36,16 @@ chroma_client = Client(settings)
 
 # Initialize embedding model and MarkItDown
 embedding_model = SentenceTransformer('multi-qa-mpnet-base-dot-v1')
-
-open_api_key = os.getenv("OPENAI_API_KEY")
-
+md = MarkItDown()
 # Image storage directory
 IMAGES_DIR = os.path.join(os.getcwd(), "stored_images")
 os.makedirs(IMAGES_DIR, exist_ok=True)
 
-def get_markitdown_instance(model_name="none", openai_api_key=open_api_key):
-    """
-    Create a MarkItDown instance based on model selection
-    """
-    model_name = model_name.lower()
-    ollama_host = os.getenv("LLM_OLLAMA_HOST", "http://ollama:11434")
-    
-    # OpenAI models
-    if model_name in ["gpt4", "gpt-4", "gpt-3.5-turbo"]:
-        if openai_api_key:
-            try:
-                openai_client = ChatOpenAI(
-                    model=model_name, 
-                    openai_api_key=openai_api_key, 
-                    temperature=0.7
-                )
-                return MarkItDown(llm_client=openai_client, llm_model=model_name)
-            except Exception as e:
-                logger.warning(f"Failed to initialize OpenAI client: {e}. Using basic extraction.")
-                return MarkItDown()
-        else:
-            logger.warning("No OpenAI API key provided. Using basic extraction.")
-            return MarkItDown()
-    
-    # Ollama models
-    elif model_name in ["llama", "llama3", "llama3:8b"]:
-        actual_model = "llama3" if model_name in ["llama", "llama3"] else model_name
-        try:
-            llama_client = OllamaLLM(
-                model=actual_model, 
-                base_url=ollama_host, 
-                temperature=0.7
-            )
-            return MarkItDown(llm_client=llama_client, llm_model=actual_model)
-        except Exception as e:
-            logger.warning(f"Failed to initialize Ollama: {e}. Using basic extraction.")
-            return MarkItDown()
-    
-    # No LLM or unknown model
-    else:
-        logger.info(f"Using basic MarkItDown without LLM support for model: {model_name}")
-        return MarkItDown()
-
 # Create a standard FastAPI app
 app = FastAPI(title="ChromaDB Dockerized")
-md = get_markitdown_instance("none")
 
-def extract_and_store_images_from_pdf(file_content: bytes, filename: str, temp_dir: str, doc_id: str, md) -> List[Dict]:
+
+def extract_and_store_images_from_file(file_content: bytes, filename: str, temp_dir: str, doc_id: str, md) -> List[Dict]:
     """Extract images from PDF and store them with metadata"""
     images_data = []
     
@@ -160,7 +110,7 @@ def process_document_with_context(file_content: bytes, filename: str, temp_dir: 
     
     # Extract images first for PDFs
     if file_extension == '.pdf':
-        images_data = extract_and_store_images_from_pdf(file_content, filename, temp_dir, doc_id, md)
+        images_data = extract_and_store_images_from_file(file_content, filename, temp_dir, doc_id, md)
     
     # Process document with MarkItDown
     temp_file_path = os.path.join(temp_dir, filename)
@@ -270,7 +220,6 @@ def health_check():
     return {
         "status": "ok",
         "markitdown_available": md is not None,
-        "openai_available": open_api_key is not None,
         "supported_formats": ["pdf", "docx", "xlsx", "csv", "txt", "pptx", "html"],
         "embedding_model": "multi-qa-mpnet-base-dot-v1",
         "images_directory": IMAGES_DIR
@@ -617,50 +566,39 @@ async def upload_and_process_documents(
     chunk_overlap: int = Query(200),
     store_images: bool = Query(True),
     model_name: str = Query("none"),
-    request: Request = None  # Add request parameter
+    request: Request = None
 ):
     """
     Upload and process documents with image storage and context preservation.
     """
     try:
-        # Get OpenAI API key from header if present
         openai_api_key = request.headers.get("X-OpenAI-API-Key") if request else None
         
-        # Create MarkItDown instance for this request
-        md = get_markitdown_instance(model_name, openai_api_key)
-        
-        # Check if collection exists
         existing_names = chroma_client.list_collections()
-                
         if collection_name not in existing_names:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Collection '{collection_name}' not found."
-            )
+            raise HTTPException(status_code=404, detail=f"Collection '{collection_name}' not found.")
         
         collection = chroma_client.get_collection(name=collection_name)
         processed_files = []
         total_chunks = 0
         total_images = 0
-        
+
         with tempfile.TemporaryDirectory() as temp_dir:
             for file in files:
                 logger.info(f"Processing file: {file.filename} with model: {model_name}")
-                
                 try:
                     file_content = await file.read()
                     doc_id = f"{Path(file.filename).stem}_{uuid.uuid4().hex[:8]}"
-                    
-                    # Process document with context preservation
-                    # Pass md instance to the processing function
+
+                    # Process the document
                     doc_data = process_document_with_context(
-                        file_content, 
-                        file.filename, 
-                        temp_dir, 
+                        file_content,
+                        file.filename,
+                        temp_dir,
                         doc_id,
-                        md  # Pass the md instance
+                        md  # <-- uses the instantiated MarkItDown()
                     )
-                    
+
                     if not doc_data["content"].strip():
                         processed_files.append({
                             "filename": file.filename,
@@ -668,23 +606,20 @@ async def upload_and_process_documents(
                             "error": "No content extracted"
                         })
                         continue
-                    
-                    # Smart chunking with context
+
                     chunks = smart_chunk_with_context(
-                        doc_data["content"], 
-                        doc_data["images_data"], 
-                        chunk_size, 
+                        doc_data["content"],
+                        doc_data["images_data"],
+                        chunk_size,
                         chunk_overlap
                     )
-                    
+
                     file_chunks = 0
                     file_images = len(doc_data["images_data"])
-                    
+
                     for chunk_data in chunks:
-                        # Generate embedding
                         embedding = embedding_model.encode([chunk_data["content"]])[0].tolist()
-                        
-                        # Prepare comprehensive metadata
+
                         metadata = {
                             "document_id": doc_id,
                             "document_name": file.filename,
@@ -700,29 +635,31 @@ async def upload_and_process_documents(
                             "timestamp": str(uuid.uuid4()),
                             "images_stored": store_images
                         }
-                        
-                        # Add image metadata
+
                         if chunk_data["images"]:
                             metadata["image_filenames"] = json.dumps([img["filename"] for img in chunk_data["images"]])
                             metadata["image_descriptions"] = json.dumps([img["description"] for img in chunk_data["images"]])
                             metadata["image_storage_paths"] = json.dumps([img["storage_path"] for img in chunk_data["images"]])
-                        
-                        # Generate unique document ID
+
                         chunk_id = f"{doc_id}_chunk_{chunk_data['chunk_index']}"
-                        
-                        # Add to collection
+
+                        # Sanity check
+                        if "document_id" not in metadata:
+                            logger.error(f"Missing document_id in metadata for chunk {chunk_id}")
+                            continue
+
                         collection.add(
                             documents=[chunk_data["content"]],
                             ids=[chunk_id],
                             metadatas=[metadata],
                             embeddings=[embedding]
                         )
-                        
+
                         file_chunks += 1
                         total_chunks += 1
-                    
+
                     total_images += file_images
-                    
+
                     processed_files.append({
                         "filename": file.filename,
                         "document_id": doc_id,
@@ -731,7 +668,7 @@ async def upload_and_process_documents(
                         "images_stored": file_images if store_images else 0,
                         "status": "success"
                     })
-                    
+
                 except Exception as e:
                     logger.error(f"Error processing file {file.filename}: {e}")
                     processed_files.append({
@@ -739,7 +676,7 @@ async def upload_and_process_documents(
                         "status": "error",
                         "error": str(e)
                     })
-        
+
         return {
             "collection": collection_name,
             "model_used": model_name,
@@ -749,31 +686,32 @@ async def upload_and_process_documents(
             "images_directory": IMAGES_DIR,
             "processed_files": processed_files
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error in document processing: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing documents: {str(e)}")
 
+
 @app.get("/documents/reconstruct/{document_id}")
 def reconstruct_document(document_id: str, collection_name: str = Query(...)):
     """
-    Reconstruct original document from stored chunks and images.
+    Reconstruct original document from stored chunks and images with enhanced formatting.
     """
     try:
         collection = chroma_client.get_collection(name=collection_name)
-        
+
         # Get all chunks for this document
         results = collection.get(
             where={"document_id": document_id},
             include=["documents", "metadatas"]
         )
-        
+
         if not results["ids"]:
             raise HTTPException(status_code=404, detail=f"Document {document_id} not found")
-        
-        # Sort chunks by position
+
+        # Sort chunks by chunk index
         chunks_data = []
         for i, chunk_id in enumerate(results["ids"]):
             metadata = results["metadatas"][i]
@@ -782,33 +720,47 @@ def reconstruct_document(document_id: str, collection_name: str = Query(...)):
                 "content": results["documents"][i],
                 "metadata": metadata
             })
-        
+
         chunks_data.sort(key=lambda x: x["chunk_index"])
-        
+
         # Reconstruct content
         reconstructed_content = ""
         all_images = []
-        
+        image_counter = 1
+
         for chunk in chunks_data:
-            reconstructed_content += chunk["content"] + "\n\n"
-            
-            # Collect image information
+            content = chunk["content"]
+
+            # Replace image markers with enhanced markdown
             if chunk["metadata"].get("has_images"):
                 try:
                     image_filenames = json.loads(chunk["metadata"].get("image_filenames", "[]"))
                     image_paths = json.loads(chunk["metadata"].get("image_storage_paths", "[]"))
                     image_descriptions = json.loads(chunk["metadata"].get("image_descriptions", "[]"))
-                    
+
                     for filename, path, desc in zip(image_filenames, image_paths, image_descriptions):
+                        img_url = f"/images/{filename}"
+                        markdown_img = (
+                            f"\n\n[Image {image_counter}]: {filename}\n"
+                            f"![Image {image_counter}]({img_url})\n"
+                            f"**Image Description:**\n{desc.strip()}\n"
+                        )
+                        marker = f"[IMAGE:{filename}]"
+                        content = content.replace(marker, markdown_img)
+                        
                         all_images.append({
                             "filename": filename,
                             "storage_path": path,
                             "description": desc,
                             "exists": os.path.exists(path)
                         })
-                except:
-                    pass
-        
+                        image_counter += 1
+
+                except Exception as e:
+                    logger.error(f"Failed to insert images: {e}")
+
+            reconstructed_content += content + "\n\n"
+
         return {
             "document_id": document_id,
             "document_name": chunks_data[0]["metadata"].get("document_name", "Unknown"),
@@ -821,11 +773,12 @@ def reconstruct_document(document_id: str, collection_name: str = Query(...)):
                 "processing_timestamp": chunks_data[0]["metadata"].get("timestamp")
             }
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error reconstructing document: {str(e)}")
+
 
 @app.get("/images/{image_filename}")
 def get_stored_image(image_filename: str):

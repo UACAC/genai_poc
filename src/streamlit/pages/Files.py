@@ -1,23 +1,17 @@
 import streamlit as st
 import requests
-from utils import fetch_collections, store_files_in_chromadb, list_all_chunks_with_scores
+from utils import fetch_collections, store_files_in_chromadb, list_all_chunks_with_scores, export_to_docx, export_to_pdf, image_to_base64, render_reconstructed_document
 import torch
 import os
+import base64
+from io import BytesIO
+from PIL import Image
 
 torch.classes.__path__ = [] 
 
 # This will resolve to the service discovery DNS name in AWS
 CHROMADB_API = os.getenv("CHROMA_URL", "http://localhost:8020")
 
-# Get OpenAI API key from environment
-OPENAI_API_KEY = os.getenv("OPEN_AI_API_KEY")
-
-# Available models
-AVAILABLE_MODELS = {
-    "gpt-4": "(Most capable)",
-    "gpt-3.5-turbo": "(Fast and efficient)",
-    "llama3": "(Open source)"
-}
 
 # Add connection debugging
 def test_chromadb_connection():
@@ -52,18 +46,6 @@ with st.sidebar:
     else:
         st.error("ChromaDB Disconnected")
         st.info(f"Trying to connect to: {CHROMADB_API}")
-    
-    # Model Selection in Sidebar
-    st.subheader("Model Configuration")
-    selected_model = st.selectbox(
-        "Select a model",
-        options=list(AVAILABLE_MODELS.keys()),
-        format_func=lambda x: f"{x} - {AVAILABLE_MODELS[x]}"
-    )
-
-    # Warn if OpenAI model selected but key missing
-    if selected_model in ["gpt-4", "gpt-3.5-turbo"] and not OPENAI_API_KEY:
-        st.error("You selected an OpenAI model but did not provide `OPEN_AI_API_KEY` in your environment.")
 
 
 # ---- COLLECTION MANAGEMENT ----
@@ -113,10 +95,10 @@ if collections:
             type=["pdf", "docx", "xlsx", "csv", "txt", "pptx", "html"], 
             accept_multiple_files=True
         )
+        store_images = st.checkbox("Store Images", value=True)
     with col2:
         chunk_size = st.number_input("Chunk Size", min_value=100, max_value=5000, value=1000)
         chunk_overlap = st.number_input("Chunk Overlap", min_value=0, max_value=500, value=200)
-        store_images = st.checkbox("Store Images", value=True)
     
     if uploaded_files and st.button("Process & Store Documents"):
         # Check if we can proceed with selected model
@@ -126,21 +108,10 @@ if collections:
             try:
                 with st.spinner("Processing documents..."):
                     # Pass model configuration to the processing function
-                    store_files_in_chromadb(
-                        uploaded_files, 
-                        collection_name,
-                        model_name=selected_model,
-                        openai_api_key=OPENAI_API_KEY,  # Pass from environment
-                        chunk_size=chunk_size,
-                        chunk_overlap=chunk_overlap,
-                        store_images=store_images
-                    )
                     
                     results = store_files_in_chromadb(
                         uploaded_files, 
                         collection_name,
-                        model_name=selected_model,
-                        openai_api_key=OPENAI_API_KEY,
                         chunk_size=chunk_size,
                         chunk_overlap=chunk_overlap,
                         store_images=store_images
@@ -166,17 +137,13 @@ if collections:
                 
                 # Show what was used
                 with st.expander("Processing Details"):
-                    st.write(f"**Model Used**: {selected_model}")
                     st.write(f"**Chunk Size**: {chunk_size}")
                     st.write(f"**Chunk Overlap**: {chunk_overlap}")
                     st.write(f"**Images Stored**: {'Yes' if store_images else 'No'}")
-                    if selected_model in ["gpt-4", "gpt-3.5-turbo"]:
-                        st.write(f"**OpenAI API**: {'Available' if OPENAI_API_KEY else 'Not Available'}")
                         
             except Exception as e:
                 st.error(f"Error storing documents: {str(e)}")
-                if "API key" in str(e):
-                    st.info("💡 Tip: Make sure OPEN_AI_API_KEY is set in your environment variables")
+                
 else:
     st.warning("No collections exist. Please create one first.")
 
@@ -196,71 +163,77 @@ if selected_collection and st.button("Fetch Documents"):
 # ---- RECONSTRUCT DOCUMENTS ----
 st.header("Reconstruct Documents")
 if collections:
-    col1, col2 = st.columns([2, 1])
+    reconstruct_collection = st.selectbox("Select Collection", collections, key="reconstruct_collection")
+    document_id = st.text_input(
+        "Document ID",
+        placeholder="Enter the document ID to reconstruct",
+        value=st.session_state.get('latest_doc_id', "")
+    )
     
-    with col1:
-        reconstruct_collection = st.selectbox("Select Collection", collections, key="reconstruct_collection")
-        document_id = st.text_input(
-            "Document ID",
-            placeholder="Enter the document ID to reconstruct",
-            value=st.session_state.get('latest_doc_id', "")
-        )
     
-    with col2:
-        if st.button("Reconstruct Document", disabled=not document_id):
-            try:
-                response = requests.get(
-                    f"{CHROMADB_API}/documents/reconstruct/{document_id}",
-                    params={"collection_name": reconstruct_collection},
-                    timeout=30
-                )
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    
-                    st.success(f"Document reconstructed: {result['document_name']}")
-                    
-                    # Show document info
-                    with st.expander("Document Information"):
-                        st.write(f"**Document ID**: {result['document_id']}")
-                        st.write(f"**Document Name**: {result['document_name']}")
-                        st.write(f"**Total Chunks**: {result['total_chunks']}")
-                        st.write(f"**File Type**: {result['metadata']['file_type']}")
-                        st.write(f"**Total Images**: {result['metadata']['total_images']}")
-                    
-                    # Show reconstructed content
-                    st.text_area(
-                        "Reconstructed Content", 
-                        result['reconstructed_content'], 
-                        height=400
-                    )
-                    
-                    # Show images if any
-                    if result.get('images'):
-                        st.subheader("Associated Images")
-                        for img in result['images']:
-                            col1, col2 = st.columns([1, 3])
-                            with col1:
-                                if img['exists']:
-                                    # You could add image display here if needed
-                                    st.write(f"{img['filename']}")
-                                else:
-                                    st.write(f"{img['filename']}")
-                            with col2:
-                                st.write(img['description'])
-                                
-                elif response.status_code == 404:
-                    st.error("Document not found")
-                else:
-                    st.error(f"Error: {response.text}")
-                    
-            except Exception as e:
-                st.error(f"Error reconstructing document: {str(e)}")
+    if st.button("Reconstruct Document", disabled=not document_id):
+        try:
+            response = requests.get(
+                f"{CHROMADB_API}/documents/reconstruct/{document_id}",
+                params={"collection_name": reconstruct_collection},
+                timeout=30
+            )
 
-# Footer with additional info
-st.markdown("---")
-st.caption("**Tips**: ")
-st.caption("- OpenAI models provide better image descriptions and document understanding")
-st.caption("- Ollama models run locally and are good for privacy-sensitive content")
-st.caption("- Adjust chunk size based on your document types (smaller for detailed analysis, larger for overview)")
-st.caption("- Enable image storage for PDFs with important visual content")
+            if response.status_code == 200:
+                result = response.json()
+
+                st.success(f"Document reconstructed: {result['document_name']}")
+
+                # Show document info
+                with st.expander("Document Information"):
+                    st.write(f"**Document ID**: {result['document_id']}")
+                    st.write(f"**Document Name**: {result['document_name']}")
+                    st.write(f"**Total Chunks**: {result['total_chunks']}")
+                    st.write(f"**File Type**: {result['metadata']['file_type']}")
+                    st.write(f"**Total Images**: {result['metadata']['total_images']}")
+
+                def image_to_base64(img_url):
+                    try:
+                        response = requests.get(img_url)
+                        img = Image.open(BytesIO(response.content))
+                        buffered = BytesIO()
+                        img.save(buffered, format="PNG")
+                        img_base64 = base64.b64encode(buffered.getvalue()).decode()
+                        return f"![img](data:image/png;base64,{img_base64})"
+                    except:
+                        return ""
+
+                # Build rich markdown with embedded images
+                render_reconstructed_document(result)
+
+                # ---- EXPORT DOCUMENTS ----
+                with st.expander("Export Document"):
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        docx_path = export_to_docx(result)
+                        with open(docx_path, "rb") as f:
+                            st.download_button(
+                                label="Download DOCX",
+                                data=f,
+                                file_name=f"{result['document_name']}.docx",
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                            )
+
+                    with col2:
+                        pdf_path = export_to_pdf(result)
+                        with open(pdf_path, "rb") as f:
+                            st.download_button(
+                                label="Download PDF",
+                                data=f,
+                                file_name=f"{result['document_name']}.pdf",
+                                mime="application/pdf"
+                            )
+
+            elif response.status_code == 404:
+                st.error("Document not found")
+            else:
+                st.error(f"Error: {response.text}")
+
+        except Exception as e:
+            st.error(f"Error reconstructing document: {str(e)}")
