@@ -15,6 +15,7 @@ st.set_page_config(page_title="AI Assistant", layout="wide")
 
 # FastAPI API endpoints
 FASTAPI_URL = os.getenv("FASTAPI_URL", "http://localhost:9020")
+CHROMADB_URL = os.getenv("CHROMA_URL", "http://localhost:8020") 
 CHAT_ENDPOINT = f"{FASTAPI_URL}/chat"
 HISTORY_ENDPOINT = f"{FASTAPI_URL}/chat-history"
 HEALTH_ENDPOINT = f"{FASTAPI_URL}/health"
@@ -32,6 +33,8 @@ if 'agents_data' not in st.session_state:
     st.session_state.agents_data = []
 if 'debate_sequence' not in st.session_state:
     st.session_state.debate_sequence = []
+if 'upload_progress' not in st.session_state:
+    st.session_state.upload_progress = {}
 
 # Cache functions
 @st.cache_data(ttl=300)
@@ -49,6 +52,66 @@ def check_model_status(model_name):
     except:
         return "unknown"
 
+def upload_documents_to_chromadb(files, collection_name, openai_api_key=None):
+    """Upload documents to ChromaDB using the existing endpoint"""
+    try:
+        # Prepare files for upload
+        files_data = []
+        for file in files:
+            files_data.append(("files", (file.name, file.getvalue(), file.type)))
+        
+        # Prepare headers
+        headers = {}
+        if openai_api_key:
+            headers["X-OpenAI-API-Key"] = openai_api_key
+        
+        # Prepare parameters
+        params = {
+            "collection_name": collection_name,
+            "chunk_size": 1000,
+            "chunk_overlap": 200,
+            "store_images": True,
+            "model_name": "enhanced",
+            "debug_mode": False,
+            "run_all_vision_models": True
+        }
+        
+        # Make request to ChromaDB upload endpoint
+        response = requests.post(
+            f"{CHROMADB_URL}/documents/upload-and-process",
+            files=files_data,
+            params=params,
+            headers=headers,
+            timeout=300
+        )
+        
+        return response
+        
+    except Exception as e:
+        raise Exception(f"Upload failed: {str(e)}")
+
+def create_collection(collection_name):
+    """Create a new ChromaDB collection"""
+    try:
+        response = requests.post(
+            f"{CHROMADB_URL}/collection/create",
+            params={"collection_name": collection_name},
+            timeout=30
+        )
+        return response
+    except Exception as e:
+        raise Exception(f"Collection creation failed: {str(e)}")
+
+def get_chromadb_collections():
+    """Get list of collections from ChromaDB"""
+    try:
+        response = requests.get(f"{CHROMADB_URL}/collections", timeout=10)
+        if response.ok:
+            return response.json().get("collections", [])
+        return []
+    except:
+        return []
+
 # Model configurations
 model_key_map = {
     "GPT-4": "gpt-4",
@@ -61,6 +124,7 @@ model_descriptions = {
     "gpt-3.5-turbo": "💡 Cost-effective model for general tasks",
     "llama3": "🦙 Fast and efficient general-purpose model",
 }
+
 
 # ----------------------------------------------------------------------
 # SIDEBAR - SYSTEM STATUS & CONTROLS
@@ -90,7 +154,13 @@ with st.sidebar:
     
     if st.button("Load Collections"):
         try:
-            st.session_state.collections = fetch_collections()
+            # Load collections from both sources
+            chat_collections = fetch_collections()
+            chromadb_collections = get_chromadb_collections()
+            
+            # Combine and deduplicate
+            all_collections = list(set(chat_collections + chromadb_collections))
+            st.session_state.collections = all_collections
             st.success("Collections loaded!")
         except Exception as e:
             st.error(f"Error: {e}")
@@ -106,7 +176,9 @@ with st.sidebar:
 # Get collections for main interface
 try:
     if not st.session_state.collections:
-        collections = fetch_collections()
+        chat_collections = fetch_collections()
+        chromadb_collections = get_chromadb_collections()
+        collections = list(set(chat_collections + chromadb_collections))
         st.session_state.collections = collections
     else:
         collections = st.session_state.collections
@@ -131,95 +203,359 @@ chat_mode = st.radio(
 if chat_mode == "💬 Direct Chat":
     st.markdown("---")
     
-    # Model selection (common for all modes)
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        mode = st.selectbox("Select AI Model:", list(model_key_map.keys()))
-        if model_key_map[mode] in model_descriptions:
-            st.info(model_descriptions[model_key_map[mode]])
-            
-    use_rag = st.checkbox("Use RAG")
-    if use_rag and collections:
-        collection_name = st.selectbox("Document Collection:", collections)
-    else:
-        collection_name = None
+    # Create tabs for chat functionality
+    chat_tab, upload_tab = st.tabs(["💬 Chat Interface", "📄 Document Upload"])
     
-    user_input = st.text_area(
-        "Ask your question:", 
-        height=100, 
-        placeholder="Example: Analyze this to determine if it is within standards..."
-    )
-
-    if st.button("Get Analysis", type="primary"):
-        if not user_input:
-            st.warning("Please enter a question.")
-        elif use_rag and not collection_name:
-            st.error("Please select a collection for RAG mode.")
-        else:
-            payload = {
-                "query": user_input,
-                "model": model_key_map[mode],
-                "use_rag": use_rag,
-                "collection_name": collection_name if use_rag else None
-            }
-
-            with st.spinner(f"{mode} is analyzing your question..."):
-                status_placeholder = st.empty()
+    with chat_tab:
+        # Model selection (common for all modes)
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            mode = st.selectbox("Select AI Model:", list(model_key_map.keys()))
+            if model_key_map[mode] in model_descriptions:
+                st.info(model_descriptions[model_key_map[mode]])
                 
-                try:
-                    status_placeholder.info("Connecting to AI model...")
+        # RAG Configuration
+        use_rag = st.checkbox("Use RAG (Retrieval Augmented Generation)")
+        if use_rag and collections:
+            collection_name = st.selectbox("Document Collection:", collections)
+        else:
+            collection_name = None
+            
+        if use_rag and not collections:
+            st.warning("No collections available. Upload documents first or check your ChromaDB connection.")
+        
+        # Chat Input
+        user_input = st.text_area(
+            "Ask your question:", 
+            height=100, 
+            placeholder="Example: Analyze this document to determine if it meets our quality standards..."
+        )
+
+        if st.button("Get Analysis", type="primary"):
+            if not user_input:
+                st.warning("Please enter a question.")
+            elif use_rag and not collection_name:
+                st.error("Please select a collection for RAG mode.")
+            else:
+                payload = {
+                    "query": user_input,
+                    "model": model_key_map[mode],
+                    "use_rag": use_rag,
+                    "collection_name": collection_name if use_rag else None
+                }
+
+                with st.spinner(f"{mode} is analyzing your question..."):
+                    status_placeholder = st.empty()
                     
-                    response = requests.post(CHAT_ENDPOINT, json=payload, timeout=300)  
-                    
-                    if response.ok:
-                        result = response.json().get("response", "")
-                        status_placeholder.empty()
+                    try:
+                        status_placeholder.info("Connecting to AI model...")
                         
-                        st.success("Analysis Complete:")
-                        st.markdown("### Analysis Results:")
-                        st.markdown(result)
+                        response = requests.post(CHAT_ENDPOINT, json=payload, timeout=300)  
                         
-                        if "response_time_ms" in response.json():
-                            response_time = response.json()["response_time_ms"]
-                            st.caption(f"Response time: {response_time/1000:.2f} seconds")
+                        if response.ok:
+                            result = response.json().get("response", "")
+                            status_placeholder.empty()
                             
-                    else:
-                        status_placeholder.empty()
-                        error_detail = response.json().get("detail", response.text) if response.headers.get("content-type") == "application/json" else response.text
-                        
-                        if "model" in error_detail and "not found" in error_detail:
-                            st.error("Model is loading for the first time. This may take 1-2 minutes. Please try again.")
-                            st.info("Tip: The first request to each model takes longer as it loads into memory.")
+                            st.success("Analysis Complete:")
+                            st.markdown("### Analysis Results:")
+                            st.markdown(result)
+                            
+                            if "response_time_ms" in response.json():
+                                response_time = response.json()["response_time_ms"]
+                                st.caption(f"Response time: {response_time/1000:.2f} seconds")
+                                
                         else:
-                            st.error(f"Error {response.status_code}: {error_detail}")
+                            status_placeholder.empty()
+                            error_detail = response.json().get("detail", response.text) if response.headers.get("content-type") == "application/json" else response.text
                             
-                except requests.exceptions.Timeout:
-                    status_placeholder.empty()
-                    st.error("Request timed out. The model might be loading - please try again in a moment.")
-                    st.info("Large models can take 1-2 minutes to load on first use.")
-                except requests.exceptions.RequestException as e:
-                    status_placeholder.empty()
-                    st.error(f"Request failed: {e}")
-                    
-    st.markdown("---")
-    st.header("Chat History")
-    if st.button("Load Chat History"):
-        try:
-            with st.spinner("Loading chat history..."):
-                response = requests.get(HISTORY_ENDPOINT, timeout=10)
-                if response.ok:
-                    history = response.json()
-                    if not history:
-                        st.info("No chat history found.")
+                            if "model" in error_detail and "not found" in error_detail:
+                                st.error("Model is loading for the first time. This may take 1-2 minutes. Please try again.")
+                                st.info("Tip: The first request to each model takes longer as it loads into memory.")
+                            else:
+                                st.error(f"Error {response.status_code}: {error_detail}")
+                                
+                    except requests.exceptions.Timeout:
+                        status_placeholder.empty()
+                        st.error("Request timed out. The model might be loading - please try again in a moment.")
+                        st.info("Large models can take 1-2 minutes to load on first use.")
+                    except requests.exceptions.RequestException as e:
+                        status_placeholder.empty()
+                        st.error(f"Request failed: {e}")
+        
+        # Chat History Section
+        st.markdown("---")
+        st.header("Chat History")
+        if st.button("Load Chat History"):
+            try:
+                with st.spinner("Loading chat history..."):
+                    response = requests.get(HISTORY_ENDPOINT, timeout=10)
+                    if response.ok:
+                        history = response.json()
+                        if not history:
+                            st.info("No chat history found.")
+                        else:
+                            for record in reversed(history[-10:]):
+                                with st.expander(f"💬 {record['timestamp'][:19]}"):
+                                    st.markdown(f"**User:** {record['user_query']}")
+                                    st.markdown(f"**Response:** {record['response']}")
                     else:
-                        for record in reversed(history[-10:]):
-                            with st.expander(f"💬 {record['timestamp'][:19]}"):
-                                st.markdown(f"**User:** {record['user_query']}")
-                                st.markdown(f"**Response:** {record['response']}")
-                else:
-                    st.error(f"Failed to fetch history: {response.status_code}")
-        except requests.exceptions.RequestException as e:
-            st.error(f"Request failed: {e}")
+                        st.error(f"Failed to fetch history: {response.status_code}")
+            except requests.exceptions.RequestException as e:
+                st.error(f"Request failed: {e}")
+    
+    with upload_tab:
+        st.header("📄 Document Upload & Processing")
+        st.info("Upload documents to create or enhance your knowledge base for RAG-powered conversations.")
+        
+        # Collection Management Section
+        st.subheader("📁 Collection Management")
+        
+        collection_action = st.radio(
+            "Choose action:",
+            ["Use Existing Collection", "Create New Collection"],
+            horizontal=True
+        )
+        
+        if collection_action == "Use Existing Collection":
+            if collections:
+                target_collection = st.selectbox(
+                    "Select collection to add documents:",
+                    collections,
+                    help="Choose an existing collection to add your documents"
+                )
+            else:
+                st.warning("No collections available. Create a new collection first.")
+                target_collection = None
+        else:
+            # Create new collection
+            new_collection_name = st.text_input(
+                "New collection name:",
+                placeholder="e.g., legal-documents, contracts-2024, policies",
+                help="Enter a descriptive name for your new collection"
+            )
+            
+            if new_collection_name:
+                if st.button("Create Collection", type="secondary"):
+                    try:
+                        with st.spinner("Creating collection..."):
+                            response = create_collection(new_collection_name)
+                            
+                            if response.status_code == 200:
+                                st.success(f"Collection '{new_collection_name}' created successfully!")
+                                # Refresh collections list
+                                st.session_state.collections.append(new_collection_name)
+                                target_collection = new_collection_name
+                            else:
+                                error_detail = response.json().get("detail", response.text) if response.headers.get("content-type") == "application/json" else response.text
+                                st.error(f"Failed to create collection: {error_detail}")
+                                target_collection = None
+                                
+                    except Exception as e:
+                        st.error(f"Error creating collection: {e}")
+                        target_collection = None
+                        
+                target_collection = new_collection_name if new_collection_name else None
+            else:
+                target_collection = None
+        
+        # Document Upload Section
+        if target_collection:
+            st.subheader("📎 Upload Documents")
+            
+            # File uploader
+            uploaded_files = st.file_uploader(
+                "Choose files to upload",
+                type=['pdf', 'docx', 'txt', 'xlsx', 'pptx', 'html', 'csv'],
+                accept_multiple_files=True,
+                help="Supported formats: PDF, Word, Text, Excel, PowerPoint, HTML, CSV"
+            )
+            
+            if uploaded_files:
+                st.write(f"**Selected files ({len(uploaded_files)}):**")
+                total_size = 0
+                for file in uploaded_files:
+                    file_size = len(file.getvalue()) / 1024 / 1024  # Size in MB
+                    total_size += file_size
+                    st.write(f"• {file.name} ({file_size:.2f} MB)")
+                
+                st.info(f"Total size: {total_size:.2f} MB")
+                
+                # Processing Options
+                with st.expander("⚙️ Processing Options", expanded=False):
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        chunk_size = st.number_input(
+                            "Chunk Size", 
+                            min_value=500, 
+                            max_value=2000, 
+                            value=1000,
+                            help="Size of text chunks for processing"
+                        )
+                        
+                        chunk_overlap = st.number_input(
+                            "Chunk Overlap", 
+                            min_value=50, 
+                            max_value=500, 
+                            value=200,
+                            help="Overlap between consecutive chunks"
+                        )
+                    
+                    with col2:
+                        use_openai_vision = st.checkbox(
+                            "Use OpenAI Vision", 
+                            value=True,
+                            help="Enhanced image analysis using OpenAI"
+                        )
+                        
+                        openai_key = st.text_input(
+                            "OpenAI API Key (optional)",
+                            type="password",
+                            help="Required for OpenAI Vision features"
+                        ) if use_openai_vision else None
+                        
+                        store_images = st.checkbox(
+                            "Store Images", 
+                            value=True,
+                            help="Extract and store images from documents"
+                        )
+                
+                # Upload and Process Button
+                if st.button("🚀 Upload & Process Documents", type="primary"):
+                    if not target_collection:
+                        st.error("Please select or create a collection first.")
+                    else:
+                        try:
+                            # Progress tracking
+                            progress_bar = st.progress(0)
+                            status_text = st.empty()
+                            
+                            status_text.text("Initializing upload...")
+                            progress_bar.progress(10)
+                            
+                            # Prepare upload
+                            status_text.text("Preparing documents for upload...")
+                            progress_bar.progress(25)
+                            
+                            # Perform upload
+                            status_text.text("Uploading and processing documents...")
+                            progress_bar.progress(50)
+                            
+                            response = upload_documents_to_chromadb(
+                                uploaded_files, 
+                                target_collection,
+                                openai_key if use_openai_vision else None
+                            )
+                            
+                            progress_bar.progress(75)
+                            
+                            if response.status_code == 200:
+                                result = response.json()
+                                progress_bar.progress(100)
+                                status_text.text("Processing complete!")
+                                
+                                st.success("🎉 Documents uploaded and processed successfully!")
+                                
+                                # Display results
+                                col1, col2, col3 = st.columns(3)
+                                
+                                with col1:
+                                    st.metric(
+                                        "Files Processed", 
+                                        result.get("total_files_processed", 0)
+                                    )
+                                
+                                with col2:
+                                    st.metric(
+                                        "Chunks Created", 
+                                        result.get("total_chunks_created", 0)
+                                    )
+                                
+                                with col3:
+                                    st.metric(
+                                        "Images Stored", 
+                                        result.get("total_images_stored", 0)
+                                    )
+                                
+                                # Detailed results
+                                with st.expander("📊 Processing Details", expanded=False):
+                                    st.json(result)
+                                
+                                # Success actions
+                                st.info("✨ Your documents are now available for RAG-powered conversations!")
+                                st.markdown("**Next steps:**")
+                                st.markdown("1. Switch to the 'Chat Interface' tab")
+                                st.markdown("2. Enable 'Use RAG' checkbox")
+                                st.markdown(f"3. Select '{target_collection}' as your collection")
+                                st.markdown("4. Start asking questions about your documents!")
+                                
+                            else:
+                                progress_bar.progress(0)
+                                error_detail = response.json().get("detail", response.text) if response.headers.get("content-type") == "application/json" else response.text
+                                st.error(f"Upload failed: {error_detail}")
+                                
+                        except Exception as e:
+                            progress_bar.progress(0)
+                            status_text.text("")
+                            st.error(f"Upload failed: {str(e)}")
+                            
+                            # Helpful error messages
+                            if "timeout" in str(e).lower():
+                                st.info("💡 Large files may take several minutes to process. Consider uploading fewer files at once.")
+                            elif "connection" in str(e).lower():
+                                st.info("💡 Check that your ChromaDB service is running and accessible.")
+        
+        else:
+            st.warning("Please select an existing collection or create a new one to upload documents.")
+        
+        # Current Collections Status
+        st.markdown("---")
+        st.subheader("📊 Current Collections")
+        
+        if st.button("🔄 Refresh Collections"):
+            try:
+                chromadb_collections = get_chromadb_collections()
+                st.session_state.collections = chromadb_collections
+                st.success(f"Found {len(chromadb_collections)} collections")
+            except Exception as e:
+                st.error(f"Error refreshing collections: {e}")
+        
+        if collections:
+            for i, collection in enumerate(collections, 1):
+                st.write(f"{i}. **{collection}**")
+        else:
+            st.info("No collections found. Create your first collection to get started!")
+        
+        # Help Section
+        with st.expander("❓ Help & Tips", expanded=False):
+            st.markdown("""
+            **Supported File Types:**
+            - **PDF**: Extracts text and images with AI-powered analysis
+            - **Word (DOCX)**: Full document processing with formatting preservation
+            - **Text (TXT)**: Plain text processing
+            - **Excel (XLSX)**: Spreadsheet data extraction
+            - **PowerPoint (PPTX)**: Presentation content extraction
+            - **HTML**: Web page content processing
+            - **CSV**: Structured data processing
+            
+            **Processing Features:**
+            - **Smart Chunking**: Automatically splits documents into optimal chunks
+            - **Image Analysis**: AI-powered image description and OCR
+            - **Multi-Model Vision**: Uses multiple AI models for comprehensive analysis
+            - **Metadata Extraction**: Preserves document structure and context
+            
+            **Best Practices:**
+            - Use descriptive collection names (e.g., 'legal-contracts-2024')
+            - Upload related documents to the same collection
+            - Smaller files process faster (under 10MB recommended)
+            - Enable OpenAI Vision for best image analysis results
+            
+            **Troubleshooting:**
+            - If upload fails, try smaller batches of files
+            - Check your internet connection for large files
+            - Ensure ChromaDB service is running
+            - Verify file formats are supported
+            """)
         
 
 # ----------------------------------------------------------------------
