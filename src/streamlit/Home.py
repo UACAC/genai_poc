@@ -86,36 +86,6 @@ with st.sidebar:
         with st.expander("System Details"):
             st.json(st.session_state.health_status)
 
-    # st.header("Available Models")
-    
-    # # Model management buttons
-    # col1, col2 = st.columns(2)
-    # with col1:
-    #     if st.button("Refresh"):
-    #         st.session_state.available_models = get_available_models_cached()
-    #         st.session_state.legal_models = []
-    #         st.success("Refreshed!")
-    
-    # # with col2:
-    # #     if st.button("🧪 Test"):
-    # #         with st.spinner("Testing..."):
-    # #             available_models = check_model_availability()
-    # #             st.session_state.available_models = available_models
-    # #             st.success(f"Found {len(available_models)} models")
-    
-    
-    # # Display available models
-    # available_models = st.session_state.available_models or get_available_models_cached()
-
-    # if available_models:
-    #     for model in available_models:
-    #         if model in model_descriptions:
-    #             st.text(f"{model}")
-    #         else:
-    #             st.text(f"{model}")
-    # else:
-    #     st.info("Click 'Refresh' to load models")
-
     st.header("Collections")
     
     if st.button("Load Collections"):
@@ -1738,9 +1708,6 @@ elif chat_mode == "📊 Session History":
                         
             except Exception as e:
                 st.error(f"Error: {e}")
-
-
-        
 
 # Footer
 st.markdown("---")
