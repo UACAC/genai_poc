@@ -7,8 +7,6 @@ from chromadb import Client
 import json
 import uuid
 import tempfile
-import shutil
-import base64
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from fastapi import UploadFile, File, Response
@@ -17,7 +15,18 @@ from markitdown import MarkItDown
 from PyPDF2 import PdfReader
 from fastapi import Request
 import logging
+import pytesseract
+from PIL import Image
+import requests
+import base64
+import numpy as np
+from collections import Counter
+from dotenv import load_dotenv
+from transformers import BlipProcessor, BlipForConditionalGeneration
+import cv2
 
+
+load_dotenv()
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -34,118 +43,709 @@ settings = Settings(
 # Create a global ChromaDB client (reuse instead of creating a new one each route)
 chroma_client = Client(settings)
 
-# Initialize embedding model and MarkItDown
+# Initialize embedding model
 embedding_model = SentenceTransformer('multi-qa-mpnet-base-dot-v1')
-md = MarkItDown()
+
 # Image storage directory
 IMAGES_DIR = os.path.join(os.getcwd(), "stored_images")
 os.makedirs(IMAGES_DIR, exist_ok=True)
 
+
 # Create a standard FastAPI app
 app = FastAPI(title="ChromaDB Dockerized")
 
+        # Fix the environment variable name
+open_ai_api_key = os.getenv("OPEN_AI_API_KEY")  # Changed from OPEN_AI_API_KEY
 
-def extract_and_store_images_from_file(file_content: bytes, filename: str, temp_dir: str, doc_id: str, md) -> List[Dict]:
-    """Extract images from PDF and store them with metadata"""
-    images_data = []
+VISION_CONFIG = {
+    "openai_enabled": bool(open_ai_api_key),
+    "ollama_enabled": True, 
+    "huggingface_enabled": True,  
+    "enhanced_local_enabled": True,
+    "ollama_url": os.getenv("OLLAMA_URL", "http://ollama:11434"),
+    "ollama_model": os.getenv("OLLAMA_VISION_MODEL", "llava"),
+    "huggingface_model": os.getenv("HUGGINGFACE_VISION_MODEL", "Salesforce/blip-image-captioning-base")
+}
+
+_hf_processor = None
+_hf_model = None
+
+
+def get_markitdown_instance(api_key_override: str = None):
+    """Create MarkItDown instance with proper configuration"""
+    api_key = api_key_override or open_ai_api_key
     
+    if api_key:
+        try:
+            from openai import OpenAI
+            client = OpenAI(api_key=api_key)
+            return MarkItDown(llm_client=client, llm_model="gpt-4o-mini")
+        except Exception as e:
+            logger.error(f"Failed to create OpenAI MarkItDown instance: {e}")
+            return MarkItDown()
+    else:
+        logger.info("No OpenAI API key available, using basic MarkItDown")
+        return MarkItDown()
+
+
+def describe_with_openai_markitdown(image_path: str, api_key: str = None) -> Optional[str]:
+    """Use OpenAI via MarkItDown for image description"""
+    try:
+        if not (api_key or open_ai_api_key):
+            logger.info("No OpenAI API key available for image description")
+            return None
+            
+        # Verify image file exists and is readable
+        if not os.path.exists(image_path):
+            logger.error(f"Image file not found: {image_path}")
+            return None
+            
+        # Verify it's a valid image
+        try:
+            with Image.open(image_path) as img:
+                img.verify()
+        except Exception as e:
+            logger.error(f"Invalid image file {image_path}: {e}")
+            return None
+            
+        md_instance = get_markitdown_instance(api_key)
+        result = md_instance.convert(image_path)
+        
+        # Extract text content properly
+        desc = None
+        if hasattr(result, 'text_content'):
+            desc = result.text_content
+        elif hasattr(result, 'content'):
+            desc = result.content
+        else:
+            desc = str(result)
+        
+        if desc and desc.strip() and len(desc.strip()) > 10:
+            # Clean up the description
+            desc_clean = desc.strip()
+            # Remove common MarkItDown artifacts
+            if desc_clean.startswith("!["):
+                # If it's just markdown image syntax, extract alt text
+                if "](" in desc_clean:
+                    alt_text = desc_clean.split("](")[0][2:]  # Remove ![
+                    if alt_text:
+                        desc_clean = alt_text
+            
+            return f"OpenAI Vision: {desc_clean}"
+        
+        logger.warning(f"OpenAI MarkItDown returned empty or too short description for {image_path}")
+        return None
+        
+    except Exception as e:
+        logger.warning(f"OpenAI MarkItDown failed for {image_path}: {e}")
+        return None
+    
+def describe_with_ollama_vision(image_path: str) -> Optional[str]:
+    """Use Ollama vision model for image description"""
+    try:
+        if not VISION_CONFIG["ollama_enabled"]:
+            return None
+            
+        if not os.path.exists(image_path):
+            logger.error(f"Image file not found: {image_path}")
+            return None
+            
+        # Read and encode image
+        with open(image_path, "rb") as img_file:
+            img_data = base64.b64encode(img_file.read()).decode()
+        
+        # Ollama API call
+        response = requests.post(
+            f"{VISION_CONFIG['ollama_url']}/api/generate",
+            json={
+                "model": VISION_CONFIG['ollama_model'],
+                "prompt": "Describe this image in detail, focusing on the main subjects, colors, and any text visible. Be specific and descriptive.",
+                "images": [img_data],
+                "stream": False
+            },
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            description = result.get("response", "").strip()
+            if description and len(description) > 10:
+                return f"Ollama Vision ({VISION_CONFIG['ollama_model']}): {description}"
+        else:
+            logger.warning(f"Ollama API returned status {response.status_code}")
+        
+        return None
+        
+    except Exception as e:
+        logger.warning(f"Ollama vision model failed for {image_path}: {e}")
+        # Disable Ollama for subsequent attempts if it fails
+        VISION_CONFIG["ollama_enabled"] = False
+        return None
+
+
+def describe_with_huggingface_vision(image_path: str) -> Optional[str]:
+    """Use Hugging Face vision model for image description"""
+    try:
+        if not VISION_CONFIG["huggingface_enabled"]:
+            return None
+            
+        if not os.path.exists(image_path):
+            logger.error(f"Image file not found: {image_path}")
+            return None
+            
+        global _hf_processor, _hf_model
+        
+        # Load models once and cache them
+        if _hf_processor is None or _hf_model is None:
+            from transformers import BlipProcessor, BlipForConditionalGeneration
+            logger.info(f"Loading HuggingFace model: {VISION_CONFIG['huggingface_model']}")
+            _hf_processor = BlipProcessor.from_pretrained(VISION_CONFIG['huggingface_model'])
+            _hf_model = BlipForConditionalGeneration.from_pretrained(VISION_CONFIG['huggingface_model'])
+        
+        # Process image
+        image = Image.open(image_path)
+        inputs = _hf_processor(image, return_tensors="pt")
+        
+        # Generate description
+        out = _hf_model.generate(**inputs, max_length=50, num_beams=4)
+        description = _hf_processor.decode(out[0], skip_special_tokens=True)
+        
+        if description and len(description) > 5:
+            return f"HuggingFace BLIP: {description}"
+        
+        return None
+        
+    except Exception as e:
+        logger.warning(f"HuggingFace vision model failed for {image_path}: {e}")
+        # Disable HuggingFace for subsequent attempts if it fails
+        VISION_CONFIG["huggingface_enabled"] = False
+        return None
+
+def enhanced_local_image_analysis(image_path: str) -> str:
+    """Enhanced local image analysis using OpenCV and PIL"""
+    try:
+        if not os.path.exists(image_path):
+            return f"Image file not found: {Path(image_path).name}"
+            
+        # Load images
+        img_pil = Image.open(image_path)
+        img_cv = cv2.imread(image_path)
+        
+        # Basic info
+        width, height = img_pil.size
+        mode = img_pil.mode
+        format_info = img_pil.format or "Unknown"
+        
+        description_parts = []
+        
+        # Size classification
+        total_pixels = width * height
+        if total_pixels > 2000000:  # > 2MP
+            size_desc = "high-resolution"
+        elif total_pixels > 500000:  # > 0.5MP
+            size_desc = "medium-resolution"
+        else:
+            size_desc = "small"
+        
+        description_parts.append(f"{size_desc} {format_info.lower()} image")
+        
+        # Advanced color analysis
+        if mode == 'RGB' and img_cv is not None:
+            # Convert to different color spaces for analysis
+            hsv = cv2.cvtColor(img_cv, cv2.COLOR_BGR2HSV)
+            
+            # Analyze color distribution
+            hist_hue = cv2.calcHist([hsv], [0], None, [180], [0, 180])
+            dominant_hue = np.argmax(hist_hue)
+            
+            # Color classification based on HSV
+            if dominant_hue < 10 or dominant_hue > 170:
+                color_desc = "with red/pink tones"
+            elif 10 <= dominant_hue < 25:
+                color_desc = "with orange/yellow tones"
+            elif 25 <= dominant_hue < 75:
+                color_desc = "with green tones"
+            elif 75 <= dominant_hue < 130:
+                color_desc = "with blue/cyan tones"
+            else:
+                color_desc = "with purple/magenta tones"
+            
+            # Check saturation and value
+            avg_saturation = np.mean(hsv[:, :, 1])
+            avg_brightness = np.mean(hsv[:, :, 2])
+            
+            if avg_saturation < 50:
+                color_desc += " (muted/grayscale)"
+            elif avg_saturation > 150:
+                color_desc += " (vibrant)"
+            
+            if avg_brightness < 85:
+                color_desc += " and dark lighting"
+            elif avg_brightness > 170:
+                color_desc += " and bright lighting"
+            
+            description_parts.append(color_desc)
+            
+            # Shape and edge detection
+            gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+            edges = cv2.Canny(gray, 50, 150)
+            
+            # Contour detection
+            contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            if len(contours) > 20:
+                description_parts.append("containing many objects or complex details")
+            elif len(contours) > 5:
+                description_parts.append("containing several distinct elements")
+            else:
+                description_parts.append("with simple composition")
+            
+            # Text detection heuristic
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (18, 18))
+            morph = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
+            text_contours, _ = cv2.findContours(morph, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            text_like_regions = 0
+            for contour in text_contours:
+                x, y, w, h = cv2.boundingRect(contour)
+                aspect_ratio = w / h if h > 0 else 0
+                if 0.1 < aspect_ratio < 10 and w > 10 and h > 5:
+                    text_like_regions += 1
+            
+            if text_like_regions > 2:
+                description_parts.append("likely containing text or symbols")
+        
+        # OCR attempt
+        try:
+            text = pytesseract.image_to_string(img_pil, config='--psm 11').strip()
+            if text and len(text) > 2:
+                # Clean and limit text
+                text_clean = ' '.join(text.split())
+                if len(text_clean) > 100:
+                    text_desc = f"with readable text including: '{text_clean[:100]}...'"
+                else:
+                    text_desc = f"with readable text: '{text_clean}'"
+                description_parts.append(text_desc)
+        except Exception as ocr_error:
+            logger.debug(f"OCR failed for {image_path}: {ocr_error}")
+        
+        # Combine description
+        final_desc = "Enhanced analysis: " + ", ".join(description_parts) + f" ({width}x{height}px)"
+        return final_desc
+        
+    except Exception as e:
+        logger.warning(f"Enhanced local analysis failed for {image_path}: {e}")
+        return basic_image_analysis(image_path)
+    
+def basic_image_analysis(image_path: str) -> str:
+    """Basic image analysis fallback"""
+    try:
+        if not os.path.exists(image_path):
+            return f"Image file not found: {Path(image_path).name}"
+            
+        img = Image.open(image_path)
+        width, height = img.size
+        mode = img.mode
+        format_info = img.format or "Unknown"
+        
+        # Try OCR
+        try:
+            text = pytesseract.image_to_string(img).strip()
+        except:
+            text = ""
+        
+        description_parts = [
+            f"Basic analysis: {format_info} image",
+            f"{width}x{height} pixels",
+            f"{mode} color mode"
+        ]
+        
+        if text:
+            description_parts.append(f"containing text: '{text[:50]}{'...' if len(text) > 50 else ''}'")
+        else:
+            description_parts.append("no readable text detected")
+        
+        return ", ".join(description_parts)
+        
+    except Exception as e:
+        logger.error(f"Basic image analysis failed for {image_path}: {e}")
+        return f"Image file: {Path(image_path).name} (analysis failed)"
+
+def describe_images_for_pages(pages_data, api_key_override=None, run_all_models=True):
+    """Comprehensive image description using multiple vision models"""
+    
+    logger.info(f"Vision system status: OpenAI={VISION_CONFIG['openai_enabled']}, "
+                f"Ollama={VISION_CONFIG['ollama_enabled']}, "
+                f"HuggingFace={VISION_CONFIG['huggingface_enabled']}, "
+                f"Enhanced Local={VISION_CONFIG['enhanced_local_enabled']}")
+    logger.info(f"Run all models mode: {run_all_models}")
+    
+    for page_info in pages_data:
+        descriptions = []
+        for img_path in page_info['images']:
+            
+            if run_all_models:
+                # NEW: Run ALL available vision models and collect all descriptions
+                all_descriptions = {}
+                methods_attempted = []
+                
+                try:
+                    logger.info(f"Running ALL vision models for image: {img_path}")
+                    
+                    # Method 1: OpenAI via MarkItDown (highest quality)
+                    if api_key_override or open_ai_api_key:
+                        try:
+                            openai_desc = describe_with_openai_markitdown(img_path, api_key_override)
+                            if openai_desc:
+                                all_descriptions["OpenAI"] = openai_desc
+                                methods_attempted.append("OpenAI ✅")
+                            else:
+                                methods_attempted.append("OpenAI ❌")
+                        except Exception as e:
+                            logger.warning(f"OpenAI failed: {e}")
+                            methods_attempted.append("OpenAI ❌")
+                    
+                    # Method 2: Ollama vision model
+                    if VISION_CONFIG["ollama_enabled"]:
+                        try:
+                            ollama_desc = describe_with_ollama_vision(img_path)
+                            if ollama_desc:
+                                all_descriptions["Ollama"] = ollama_desc
+                                methods_attempted.append("Ollama ✅")
+                            else:
+                                methods_attempted.append("Ollama ❌")
+                        except Exception as e:
+                            logger.warning(f"Ollama failed: {e}")
+                            methods_attempted.append("Ollama ❌")
+                    
+                    # Method 3: HuggingFace BLIP model
+                    if VISION_CONFIG["huggingface_enabled"]:
+                        try:
+                            hf_desc = describe_with_huggingface_vision(img_path)
+                            if hf_desc:
+                                all_descriptions["HuggingFace"] = hf_desc
+                                methods_attempted.append("HuggingFace ✅")
+                            else:
+                                methods_attempted.append("HuggingFace ❌")
+                        except Exception as e:
+                            logger.warning(f"HuggingFace failed: {e}")
+                            methods_attempted.append("HuggingFace ❌")
+                    
+                    # Method 4: Enhanced local analysis with OpenCV
+                    if VISION_CONFIG["enhanced_local_enabled"]:
+                        try:
+                            enhanced_desc = enhanced_local_image_analysis(img_path)
+                            if enhanced_desc:
+                                all_descriptions["Enhanced Local"] = enhanced_desc
+                                methods_attempted.append("Enhanced Local ✅")
+                            else:
+                                methods_attempted.append("Enhanced Local ❌")
+                        except Exception as e:
+                            logger.warning(f"Enhanced Local failed: {e}")
+                            methods_attempted.append("Enhanced Local ❌")
+                    
+                    # Method 5: Basic fallback (always include)
+                    try:
+                        basic_desc = basic_image_analysis(img_path)
+                        all_descriptions["Basic Fallback"] = basic_desc
+                        methods_attempted.append("Basic Fallback ✅")
+                    except Exception as e:
+                        logger.warning(f"Basic analysis failed: {e}")
+                        methods_attempted.append("Basic Fallback ❌")
+                    
+                    # Combine all descriptions into a comprehensive analysis
+                    if all_descriptions:
+                        combined_description = create_combined_description(all_descriptions, Path(img_path).name)
+                        descriptions.append(combined_description)
+                        
+                        logger.info(f"Multi-model analysis complete for {Path(img_path).name}")
+                        logger.info(f"Methods: {', '.join(methods_attempted)}")
+                        logger.info(f"Total descriptions: {len(all_descriptions)}")
+                    else:
+                        descriptions.append(f"All image analysis methods failed for: {Path(img_path).name}")
+                        logger.error(f"All methods failed for {img_path}")
+                
+                except Exception as e:
+                    logger.error(f"Critical error in multi-model analysis for {img_path}: {e}")
+                    descriptions.append(f"Critical analysis failure: {Path(img_path).name}")
+            
+            else:
+                # ORIGINAL: First-success-only mode (keep for compatibility)
+                description = None
+                method_used = "none"
+                
+                try:
+                    logger.info(f"Running first-success mode for image: {img_path}")
+                    
+                    # Try methods in order until one succeeds
+                    if not description and (api_key_override or open_ai_api_key):
+                        description = describe_with_openai_markitdown(img_path, api_key_override)
+                        if description:
+                            method_used = "OpenAI"
+                    
+                    if not description and VISION_CONFIG["ollama_enabled"]:
+                        description = describe_with_ollama_vision(img_path)
+                        if description:
+                            method_used = "Ollama"
+                    
+                    if not description and VISION_CONFIG["huggingface_enabled"]:
+                        description = describe_with_huggingface_vision(img_path)
+                        if description:
+                            method_used = "HuggingFace"
+                    
+                    if not description and VISION_CONFIG["enhanced_local_enabled"]:
+                        description = enhanced_local_image_analysis(img_path)
+                        method_used = "Enhanced Local"
+                    
+                    if not description:
+                        description = basic_image_analysis(img_path)
+                        method_used = "Basic Fallback"
+                    
+                    descriptions.append(description)
+                    logger.info(f"[{method_used}] Successfully described {Path(img_path).name}")
+                    
+                except Exception as e:
+                    logger.error(f"All image description methods failed for {img_path}: {e}")
+                    descriptions.append(f"Image analysis failed: {Path(img_path).name}")
+        
+        page_info['image_descriptions'] = descriptions
+    return pages_data
+
+def extract_and_store_images_from_file(file_content: bytes, filename: str, temp_dir: str, doc_id: str) -> List[Dict]:
+    """Fixed image extraction from PDF with better error handling"""
+    pages_data = []
+
     try:
         temp_pdf_path = os.path.join(temp_dir, filename)
         with open(temp_pdf_path, 'wb') as f:
             f.write(file_content)
-        
+
         reader = PdfReader(temp_pdf_path)
-        
+        logger.info(f"Successfully opened PDF with {len(reader.pages)} pages")
+
         for page_num, page in enumerate(reader.pages, 1):
-            resources = page.get("/Resources")
-            if resources and "/XObject" in resources:
-                xobjects = resources["/XObject"].get_object()
+            page_images = []
+            
+            try:
+                # Get page resources
+                if "/Resources" not in page:
+                    logger.info(f"Page {page_num}: No resources found")
+                    pages_data.append({
+                        "page": page_num,
+                        "images": page_images,
+                        "text": None
+                    })
+                    continue
+                    
+                resources = page["/Resources"]
                 
+                # Check if resources is an IndirectObject and resolve it
+                if hasattr(resources, 'get_object'):
+                    resources = resources.get_object()
+                
+                # Check for XObject (images)
+                if "/XObject" not in resources:
+                    logger.info(f"Page {page_num}: No XObjects found")
+                    pages_data.append({
+                        "page": page_num,
+                        "images": page_images,
+                        "text": None
+                    })
+                    continue
+                
+                xobjects = resources["/XObject"]
+                
+                # Handle IndirectObject for XObjects
+                if hasattr(xobjects, 'get_object'):
+                    xobjects = xobjects.get_object()
+                
+                # Iterate through XObjects
                 for obj_name in xobjects:
-                    xobj = xobjects[obj_name]
-                    if xobj.get("/Subtype") == "/Image":
-                        try:
-                            filters = xobj.get('/Filter')
-                            data = xobj.get_data()
-                            img_ext = 'jpg' if filters == '/DCTDecode' else 'png'
-                            
-                            # Create unique image filename
-                            img_filename = f"{doc_id}_page_{page_num}_{obj_name[1:]}.{img_ext}"
-                            img_storage_path = os.path.join(IMAGES_DIR, img_filename)
-                            
-                            # Save image to storage directory
-                            with open(img_storage_path, "wb") as img_file:
-                                img_file.write(data)
-                            
-                            # Get image description using MarkItDown
+                    try:
+                        xobj = xobjects[obj_name]
+                        
+                        # Handle IndirectObject
+                        if hasattr(xobj, 'get_object'):
+                            xobj = xobj.get_object()
+                        
+                        # Check if it's an image
+                        if xobj.get("/Subtype") == "/Image":
                             try:
-                                result = md.convert(img_storage_path)
-                                description = result.text_content if hasattr(result, 'text_content') else str(result)
-                            except:
-                                description = f"Image: {img_filename}"
-                            
-                            images_data.append({
-                                "filename": img_filename,
-                                "storage_path": img_storage_path,
-                                "page": page_num,
-                                "description": description,
-                                "position_marker": f"[IMAGE:{img_filename}]"
-                            })
-                            
-                            logger.info(f"Stored image: {img_filename}")
-                            
-                        except Exception as e:
-                            logger.error(f"Failed to extract image {obj_name}: {e}")
-    
+                                # Get image data
+                                filters = xobj.get('/Filter')
+                                data = xobj.get_data()
+                                
+                                # Determine file extension
+                                if filters == '/DCTDecode':
+                                    img_ext = 'jpg'
+                                elif filters == '/FlateDecode':
+                                    img_ext = 'png'
+                                else:
+                                    img_ext = 'png'  # Default to PNG
+                                
+                                # Create filename
+                                img_filename = f"{doc_id}_page_{page_num}_{obj_name[1:]}.{img_ext}"
+                                img_storage_path = os.path.join(IMAGES_DIR, img_filename)
+                                
+                                # Save image
+                                with open(img_storage_path, "wb") as img_file:
+                                    img_file.write(data)
+                                
+                                # Verify image was saved and is valid
+                                if os.path.exists(img_storage_path) and os.path.getsize(img_storage_path) > 0:
+                                    # Try to open with PIL to verify it's a valid image
+                                    try:
+                                        with Image.open(img_storage_path) as test_img:
+                                            test_img.verify()
+                                        page_images.append(img_storage_path)
+                                        logger.info(f"Successfully stored and verified image: {img_filename}")
+                                    except Exception as img_verify_error:
+                                        logger.warning(f"Invalid image file created: {img_filename}, error: {img_verify_error}")
+                                        # Remove invalid file
+                                        if os.path.exists(img_storage_path):
+                                            os.remove(img_storage_path)
+                                else:
+                                    logger.warning(f"Image file was not created or is empty: {img_filename}")
+                                    
+                            except Exception as e:
+                                logger.error(f"Failed to extract image {obj_name} from page {page_num}: {e}")
+                                
+                    except Exception as e:
+                        logger.error(f"Error processing XObject {obj_name} on page {page_num}: {e}")
+                        
+            except Exception as e:
+                logger.error(f"Error processing page {page_num}: {e}")
+            
+            pages_data.append({
+                "page": page_num,
+                "images": page_images,
+                "text": None
+            })
+            
+            logger.info(f"Page {page_num}: Found {len(page_images)} images")
+
     except Exception as e:
         logger.error(f"Error extracting images from {filename}: {e}")
-    
-    return images_data
 
-def process_document_with_context(file_content: bytes, filename: str, temp_dir: str, doc_id: str, md) -> Dict:
-    """Process document maintaining context and storing images"""
-    
+    logger.info(f"Total images extracted from {filename}: {sum(len(p['images']) for p in pages_data)}")
+    return pages_data
+
+
+def process_document_with_context(file_content: bytes, filename: str, temp_dir: str, doc_id: str, openai_api_key: str = None) -> Dict:
+    """Process document maintaining context and storing images and their descriptions using MarkItDown"""
+
     file_extension = Path(filename).suffix.lower()
     images_data = []
-    
-    # Extract images first for PDFs
+
+    # --- Step 1: Extract images from file ---
     if file_extension == '.pdf':
-        images_data = extract_and_store_images_from_file(file_content, filename, temp_dir, doc_id, md)
-    
-    # Process document with MarkItDown
+        pages_data = extract_and_store_images_from_file(file_content, filename, temp_dir, doc_id)
+
+        # --- Step 2: Generate descriptions with MarkItDown ---
+        pages_data = describe_images_for_pages(pages_data, openai_api_key)
+
+        # --- Step 3: Flatten all image data ---
+        for page in pages_data:
+            for img_path, desc in zip(page["images"], page.get("image_descriptions", [])):
+                images_data.append({
+                    "filename": Path(img_path).name,
+                    "storage_path": img_path,
+                    "description": desc,
+                    "position_marker": f"[IMAGE:{Path(img_path).name}]",
+                    "page": page["page"]
+                })
+
+    # --- Step 4: Save the original file ---
     temp_file_path = os.path.join(temp_dir, filename)
     with open(temp_file_path, 'wb') as f:
         f.write(file_content)
-    
+
+    # --- Step 5: Run MarkItDown on entire document ---
     try:
-        result = md.convert(temp_file_path)
+        md_instance = get_markitdown_instance(openai_api_key)
+        result = md_instance.convert(temp_file_path)
         content = result.text_content if hasattr(result, 'text_content') else str(result)
+        logger.info(f"MarkItDown extracted content length: {len(content)} characters")
     except Exception as e:
         logger.error(f"MarkItDown processing failed for {filename}: {e}")
         if file_extension == '.txt':
             content = file_content.decode('utf-8', errors='ignore')
         else:
-            raise e
-    
-    # Insert image markers in content at logical positions
-    if images_data and content:
-        # Simple strategy: insert image markers at paragraph breaks
-        paragraphs = content.split('\n\n')
+            # If MarkItDown fails, create basic content structure
+            content = f"Document: {filename}\n\nContent could not be extracted via MarkItDown."
+
+    # --- Step 6: Enhanced image integration strategy ---
+    if images_data:
+        logger.info(f"Integrating {len(images_data)} images into document content")
         
-        enhanced_content = []
-        img_index = 0
-        
-        for i, paragraph in enumerate(paragraphs):
-            enhanced_content.append(paragraph)
+        # Strategy 1: If content is very short or empty, create a structured document
+        if len(content.strip()) < 50:
+            logger.info("Content is minimal, creating structured document with images")
+            enhanced_content = [f"Document: {filename}\n"]
             
-            # Insert image markers strategically
-            if img_index < len(images_data) and i % max(2, len(paragraphs) // len(images_data)) == 1:
-                img = images_data[img_index]
-                enhanced_content.append(f"\n{img['position_marker']}\n{img['description']}\n")
-                img_index += 1
+            # Group images by page
+            pages_with_images = {}
+            for img_data in images_data:
+                page_num = img_data.get("page", 1)
+                if page_num not in pages_with_images:
+                    pages_with_images[page_num] = []
+                pages_with_images[page_num].append(img_data)
+            
+            # Add each page with its images
+            for page_num in sorted(pages_with_images.keys()):
+                enhanced_content.append(f"\n--- Page {page_num} ---\n")
+                for img_data in pages_with_images[page_num]:
+                    enhanced_content.append(f"{img_data['position_marker']}")
+                    enhanced_content.append(f"Image Description: {img_data['description']}\n")
+            
+            content = "\n".join(enhanced_content)
         
-        content = '\n\n'.join(enhanced_content)
-    
+        else:
+            # Strategy 2: Insert images into existing content
+            logger.info("Inserting images into existing content")
+            
+            # Split content into sections (paragraphs or lines)
+            if '\n\n' in content:
+                sections = content.split('\n\n')
+                separator = '\n\n'
+            else:
+                sections = content.split('\n')
+                separator = '\n'
+            
+            enhanced_sections = []
+            images_inserted = 0
+            
+            # Insert images at strategic points
+            for i, section in enumerate(sections):
+                enhanced_sections.append(section)
+                
+                # Insert an image every few sections if we have images left
+                if (images_inserted < len(images_data) and 
+                    i > 0 and 
+                    (i % max(1, len(sections) // len(images_data)) == 0)):
+                    
+                    img_data = images_data[images_inserted]
+                    image_section = f"\n{img_data['position_marker']}\nImage Description: {img_data['description']}\n"
+                    enhanced_sections.append(image_section)
+                    images_inserted += 1
+                    logger.info(f"Inserted image {images_inserted}: {img_data['filename']}")
+            
+            # Add any remaining images at the end
+            while images_inserted < len(images_data):
+                img_data = images_data[images_inserted]
+                image_section = f"\n{img_data['position_marker']}\nImage Description: {img_data['description']}\n"
+                enhanced_sections.append(image_section)
+                images_inserted += 1
+                logger.info(f"Added remaining image {images_inserted}: {img_data['filename']}")
+            
+            content = separator.join(enhanced_sections)
+        
+        logger.info(f"Final content length after image integration: {len(content)} characters")
+        
+        # Log a sample of the final content for debugging
+        sample_content = content[:500] + "..." if len(content) > 500 else content
+        logger.info(f"Sample final content: {sample_content}")
+
     return {
         "content": content,
         "images_data": images_data,
@@ -153,17 +753,22 @@ def process_document_with_context(file_content: bytes, filename: str, temp_dir: 
     }
 
 def smart_chunk_with_context(content: str, images_data: List[Dict], chunk_size: int = 1000, overlap: int = 200) -> List[Dict]:
-    """Chunk content while preserving image context and references"""
+    """Enhanced chunking that preserves image context and references"""
     
     chunks = []
     
-    # Find image marker positions
+    # Find all image marker positions in the content
     image_positions = {}
     for img in images_data:
         marker = img['position_marker']
         pos = content.find(marker)
         if pos != -1:
             image_positions[pos] = img
+            logger.info(f"Found image marker '{marker}' at position {pos}")
+        else:
+            logger.warning(f"Image marker '{marker}' not found in content")
+    
+    logger.info(f"Found {len(image_positions)} image markers in content")
     
     # Split content into chunks
     start = 0
@@ -173,31 +778,41 @@ def smart_chunk_with_context(content: str, images_data: List[Dict], chunk_size: 
         end = start + chunk_size
         chunk_text = content[start:end]
         
-        # Adjust boundaries to preserve context
+        # Adjust boundaries to preserve context (avoid breaking sentences/paragraphs)
         if end < len(content):
             # Try to break at sentence or paragraph boundaries
             last_period = chunk_text.rfind('.')
             last_newline = chunk_text.rfind('\n\n')
-            break_point = max(last_period, last_newline)
+            last_single_newline = chunk_text.rfind('\n')
             
-            if break_point > start + chunk_size // 2:
+            # Choose the best break point
+            break_point = max(last_period, last_newline, last_single_newline)
+            
+            if break_point > start + chunk_size // 2:  # Only use break point if it's not too early
                 chunk_text = content[start:break_point + 1]
                 end = break_point + 1
         
-        # Find images in this chunk
+        # Find images that appear in this chunk
         chunk_images = []
         for pos, img_data in image_positions.items():
             if start <= pos < end:
                 chunk_images.append(img_data)
+                logger.info(f"Chunk {chunk_index}: Including image {img_data['filename']}")
         
-        chunks.append({
+        # Create chunk metadata
+        chunk_data = {
             "content": chunk_text.strip(),
             "chunk_index": chunk_index,
             "start_position": start,
             "end_position": end,
             "images": chunk_images,
             "has_images": len(chunk_images) > 0
-        })
+        }
+        
+        chunks.append(chunk_data)
+        
+        # Log chunk info
+        logger.info(f"Chunk {chunk_index}: {len(chunk_text)} chars, {len(chunk_images)} images")
         
         chunk_index += 1
         start = end - overlap
@@ -205,7 +820,304 @@ def smart_chunk_with_context(content: str, images_data: List[Dict], chunk_size: 
         if start >= len(content):
             break
     
+    logger.info(f"Created {len(chunks)} chunks total")
     return chunks
+
+def debug_content_and_images(content: str, images_data: List[Dict]):
+    """Debug helper to show content and image integration"""
+    logger.info("=== CONTENT AND IMAGE INTEGRATION DEBUG ===")
+    logger.info(f"Content length: {len(content)} characters")
+    logger.info(f"Number of images: {len(images_data)}")
+    
+    for i, img_data in enumerate(images_data):
+        marker = img_data['position_marker']
+        pos = content.find(marker)
+        logger.info(f"Image {i+1}: {img_data['filename']} -> Marker: {marker} -> Position: {pos}")
+    
+    # Show first 1000 characters of content
+    sample = content[:1000] + "..." if len(content) > 1000 else content
+    logger.info(f"Content sample: {sample}")
+    logger.info("=== END DEBUG ===")
+    
+def create_combined_description(all_descriptions: dict, filename: str) -> str:
+    """Create a comprehensive description combining all vision model outputs"""
+    
+    # Header
+    combined = f"=== Multi-Model Vision Analysis for {filename} ===\n\n"
+    
+    # Priority order for display
+    model_priority = ["OpenAI", "Ollama", "HuggingFace", "Enhanced Local", "Basic Fallback"]
+    
+    # Add each model's description
+    for model in model_priority:
+        if model in all_descriptions:
+            description = all_descriptions[model]
+            combined += f"🔍 **{model} Analysis:**\n{description}\n\n"
+    
+    # Add any models not in priority list
+    for model, description in all_descriptions.items():
+        if model not in model_priority:
+            combined += f"🔍 **{model} Analysis:**\n{description}\n\n"
+    
+    # Summary section
+    combined += "**Analysis Summary:**\n"
+    combined += f"- Total models used: {len(all_descriptions)}\n"
+    combined += f"- Models: {', '.join(all_descriptions.keys())}\n"
+    
+    # Extract key insights (basic analysis)
+    insights = extract_key_insights(all_descriptions)
+    if insights:
+        combined += f"- Key insights: {insights}\n"
+    
+    combined += "\n" + "="*50 + "\n"
+    
+    return combined
+
+
+def extract_key_insights(all_descriptions: dict) -> str:
+    """Extract key insights from multiple descriptions"""
+    insights = []
+    
+    # Combine all description text
+    all_text = " ".join(all_descriptions.values()).lower()
+    
+    # Size indicators
+    if "high-resolution" in all_text:
+        insights.append("High quality image")
+    elif "small" in all_text:
+        insights.append("Small/low resolution")
+    
+    return ", ".join(insights[:3])  # Limit to top 3 insights
+
+
+def process_document_with_context_multi_model(file_content: bytes, filename: str, temp_dir: str, doc_id: str, openai_api_key: str = None, run_all_models: bool = True) -> Dict:
+    """Process document with multi-model vision option"""
+    
+    file_extension = Path(filename).suffix.lower()
+    images_data = []
+
+    # Extract images from file
+    if file_extension == '.pdf':
+        pages_data = extract_and_store_images_from_file(file_content, filename, temp_dir, doc_id)
+
+        # Generate descriptions with multi-model option
+        pages_data = describe_images_for_pages(pages_data, openai_api_key, run_all_models)
+
+        # Flatten all image data
+        for page in pages_data:
+            for img_path, desc in zip(page["images"], page.get("image_descriptions", [])):
+                images_data.append({
+                    "filename": Path(img_path).name,
+                    "storage_path": img_path,
+                    "description": desc,
+                    "position_marker": f"[IMAGE:{Path(img_path).name}]",
+                    "page": page["page"]
+                })
+
+    # Rest of processing remains the same as your existing function...
+    temp_file_path = os.path.join(temp_dir, filename)
+    with open(temp_file_path, 'wb') as f:
+        f.write(file_content)
+
+    try:
+        md_instance = get_markitdown_instance(openai_api_key)
+        result = md_instance.convert(temp_file_path)
+        content = result.text_content if hasattr(result, 'text_content') else str(result)
+        logger.info(f"MarkItDown extracted content length: {len(content)} characters")
+    except Exception as e:
+        logger.error(f"MarkItDown processing failed for {filename}: {e}")
+        if file_extension == '.txt':
+            content = file_content.decode('utf-8', errors='ignore')
+        else:
+            content = f"Document: {filename}\n\nContent could not be extracted via MarkItDown."
+
+    # Enhanced image integration strategy (same as before)
+    if images_data:
+        logger.info(f"Integrating {len(images_data)} images into document content")
+        
+        if len(content.strip()) < 50:
+            logger.info("Content is minimal, creating structured document with images")
+            enhanced_content = [f"Document: {filename}\n"]
+            
+            pages_with_images = {}
+            for img_data in images_data:
+                page_num = img_data.get("page", 1)
+                if page_num not in pages_with_images:
+                    pages_with_images[page_num] = []
+                pages_with_images[page_num].append(img_data)
+            
+            for page_num in sorted(pages_with_images.keys()):
+                enhanced_content.append(f"\n--- Page {page_num} ---\n")
+                for img_data in pages_with_images[page_num]:
+                    enhanced_content.append(f"{img_data['position_marker']}")
+                    enhanced_content.append(f"Image Description: {img_data['description']}\n")
+            
+            content = "\n".join(enhanced_content)
+        
+        else:
+            logger.info("Inserting images into existing content")
+            
+            if '\n\n' in content:
+                sections = content.split('\n\n')
+                separator = '\n\n'
+            else:
+                sections = content.split('\n')
+                separator = '\n'
+            
+            enhanced_sections = []
+            images_inserted = 0
+            
+            for i, section in enumerate(sections):
+                enhanced_sections.append(section)
+                
+                if (images_inserted < len(images_data) and 
+                    i > 0 and 
+                    (i % max(1, len(sections) // len(images_data)) == 0)):
+                    
+                    img_data = images_data[images_inserted]
+                    image_section = f"\n{img_data['position_marker']}\nImage Description: {img_data['description']}\n"
+                    enhanced_sections.append(image_section)
+                    images_inserted += 1
+                    logger.info(f"Inserted image {images_inserted}: {img_data['filename']}")
+            
+            while images_inserted < len(images_data):
+                img_data = images_data[images_inserted]
+                image_section = f"\n{img_data['position_marker']}\nImage Description: {img_data['description']}\n"
+                enhanced_sections.append(image_section)
+                images_inserted += 1
+                logger.info(f"Added remaining image {images_inserted}: {img_data['filename']}")
+            
+            content = separator.join(enhanced_sections)
+        
+        logger.info(f"Final content length after image integration: {len(content)} characters")
+
+    return {
+        "content": content,
+        "images_data": images_data,
+        "file_type": file_extension
+    }
+    
+def process_document_with_context(file_content: bytes, filename: str, temp_dir: str, doc_id: str, openai_api_key: str = None) -> Dict:
+    """Process document maintaining context and storing images and their descriptions using MarkItDown"""
+
+    file_extension = Path(filename).suffix.lower()
+    images_data = []
+
+    # --- Step 1: Extract images from file ---
+    if file_extension == '.pdf':
+        pages_data = extract_and_store_images_from_file(file_content, filename, temp_dir, doc_id)
+
+        # --- Step 2: Generate descriptions with MarkItDown ---
+        pages_data = describe_images_for_pages(pages_data, openai_api_key)
+
+        # --- Step 3: Flatten all image data ---
+        for page in pages_data:
+            for img_path, desc in zip(page["images"], page.get("image_descriptions", [])):
+                images_data.append({
+                    "filename": Path(img_path).name,
+                    "storage_path": img_path,
+                    "description": desc,
+                    "position_marker": f"[IMAGE:{Path(img_path).name}]",
+                    "page": page["page"]
+                })
+
+    # --- Step 4: Save the original file ---
+    temp_file_path = os.path.join(temp_dir, filename)
+    with open(temp_file_path, 'wb') as f:
+        f.write(file_content)
+
+    # --- Step 5: Run MarkItDown on entire document ---
+    try:
+        md_instance = get_markitdown_instance(openai_api_key)
+        result = md_instance.convert(temp_file_path)
+        content = result.text_content if hasattr(result, 'text_content') else str(result)
+        logger.info(f"MarkItDown extracted content length: {len(content)} characters")
+    except Exception as e:
+        logger.error(f"MarkItDown processing failed for {filename}: {e}")
+        if file_extension == '.txt':
+            content = file_content.decode('utf-8', errors='ignore')
+        else:
+            # If MarkItDown fails, create basic content structure
+            content = f"Document: {filename}\n\nContent could not be extracted via MarkItDown."
+
+    # --- Step 6: Enhanced image integration strategy ---
+    if images_data:
+        logger.info(f"Integrating {len(images_data)} images into document content")
+        
+        # Strategy 1: If content is very short or empty, create a structured document
+        if len(content.strip()) < 50:
+            logger.info("Content is minimal, creating structured document with images")
+            enhanced_content = [f"Document: {filename}\n"]
+            
+            # Group images by page
+            pages_with_images = {}
+            for img_data in images_data:
+                page_num = img_data.get("page", 1)
+                if page_num not in pages_with_images:
+                    pages_with_images[page_num] = []
+                pages_with_images[page_num].append(img_data)
+            
+            # Add each page with its images
+            for page_num in sorted(pages_with_images.keys()):
+                enhanced_content.append(f"\n--- Page {page_num} ---\n")
+                for img_data in pages_with_images[page_num]:
+                    enhanced_content.append(f"{img_data['position_marker']}")
+                    enhanced_content.append(f"Image Description: {img_data['description']}\n")
+            
+            content = "\n".join(enhanced_content)
+        
+        else:
+            # Strategy 2: Insert images into existing content
+            logger.info("Inserting images into existing content")
+            
+            # Split content into sections (paragraphs or lines)
+            if '\n\n' in content:
+                sections = content.split('\n\n')
+                separator = '\n\n'
+            else:
+                sections = content.split('\n')
+                separator = '\n'
+            
+            enhanced_sections = []
+            images_inserted = 0
+            
+            # Insert images at strategic points
+            for i, section in enumerate(sections):
+                enhanced_sections.append(section)
+                
+                # Insert an image every few sections if we have images left
+                if (images_inserted < len(images_data) and 
+                    i > 0 and 
+                    (i % max(1, len(sections) // len(images_data)) == 0)):
+                    
+                    img_data = images_data[images_inserted]
+                    image_section = f"\n{img_data['position_marker']}\nImage Description: {img_data['description']}\n"
+                    enhanced_sections.append(image_section)
+                    images_inserted += 1
+                    logger.info(f"Inserted image {images_inserted}: {img_data['filename']}")
+            
+            # Add any remaining images at the end
+            while images_inserted < len(images_data):
+                img_data = images_data[images_inserted]
+                image_section = f"\n{img_data['position_marker']}\nImage Description: {img_data['description']}\n"
+                enhanced_sections.append(image_section)
+                images_inserted += 1
+                logger.info(f"Added remaining image {images_inserted}: {img_data['filename']}")
+            
+            content = separator.join(enhanced_sections)
+        
+        logger.info(f"Final content length after image integration: {len(content)} characters")
+        
+        # Log a sample of the final content for debugging
+        sample_content = content[:500] + "..." if len(content) > 500 else content
+        logger.info(f"Sample final content: {sample_content}")
+
+    return {
+        "content": content,
+        "images_data": images_data,
+        "file_type": file_extension
+    }
+
 
 ### Health Checks ###
 
@@ -216,13 +1128,22 @@ def root_health_check():
 
 @app.get("/health")
 def health_check():
-    """Enhanced health check endpoint."""
+    """Enhanced health check endpoint with vision model status"""
     return {
         "status": "ok",
-        "markitdown_available": md is not None,
+        "markitdown_available": True,
         "supported_formats": ["pdf", "docx", "xlsx", "csv", "txt", "pptx", "html"],
         "embedding_model": "multi-qa-mpnet-base-dot-v1",
-        "images_directory": IMAGES_DIR
+        "images_directory": IMAGES_DIR,
+        "vision_models": {
+            "openai_enabled": VISION_CONFIG["openai_enabled"],
+            "ollama_enabled": VISION_CONFIG["ollama_enabled"],
+            "huggingface_enabled": VISION_CONFIG["huggingface_enabled"],
+            "enhanced_local_enabled": VISION_CONFIG["enhanced_local_enabled"],
+        },
+        "api_keys": {
+            "openai_configured": bool(open_ai_api_key)
+        }
     }
 
 
@@ -236,7 +1157,6 @@ def list_collections():
     except Exception as e:
         logger.error(f"Error listing collections: {e}")
         raise HTTPException(status_code=500, detail="Failed to list collections")
-
 
 
 @app.post("/collection/create")
@@ -557,7 +1477,6 @@ def query_documents(req: DocumentQueryRequest):
         logger.error(f"Error querying documents: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error querying documents: {str(e)}")
 
-
 @app.post("/documents/upload-and-process")
 async def upload_and_process_documents(
     files: List[UploadFile] = File(...),
@@ -566,13 +1485,21 @@ async def upload_and_process_documents(
     chunk_overlap: int = Query(200),
     store_images: bool = Query(True),
     model_name: str = Query("none"),
+    debug_mode: bool = Query(False),
+    run_all_vision_models: bool = Query(True),  # NEW PARAMETER
     request: Request = None
 ):
     """
     Upload and process documents with image storage and context preservation.
     """
     try:
+        # Get OpenAI API key from headers or environment
         openai_api_key = request.headers.get("X-OpenAI-API-Key") if request else None
+        if not openai_api_key:
+            openai_api_key = os.getenv("OPENAI_API_KEY")
+        
+        if not openai_api_key:
+            logger.warning("No OpenAI API key provided - using other vision models for image descriptions")
         
         existing_names = chroma_client.list_collections()
         if collection_name not in existing_names:
@@ -586,19 +1513,23 @@ async def upload_and_process_documents(
         with tempfile.TemporaryDirectory() as temp_dir:
             for file in files:
                 logger.info(f"Processing file: {file.filename} with model: {model_name}")
+                logger.info(f"Multi-model vision mode: {run_all_vision_models}")
+                
                 try:
                     file_content = await file.read()
                     doc_id = f"{Path(file.filename).stem}_{uuid.uuid4().hex[:8]}"
 
-                    # Process the document
-                    doc_data = process_document_with_context(
+                    # Process the document with multi-model option
+                    doc_data = process_document_with_context_multi_model(
                         file_content,
                         file.filename,
                         temp_dir,
                         doc_id,
-                        md  # <-- uses the instantiated MarkItDown()
+                        openai_api_key,
+                        run_all_vision_models  # Pass the parameter
                     )
 
+                    # Rest of the processing remains the same...
                     if not doc_data["content"].strip():
                         processed_files.append({
                             "filename": file.filename,
@@ -606,6 +1537,9 @@ async def upload_and_process_documents(
                             "error": "No content extracted"
                         })
                         continue
+
+                    if debug_mode:
+                        debug_content_and_images(doc_data["content"], doc_data["images_data"])
 
                     chunks = smart_chunk_with_context(
                         doc_data["content"],
@@ -633,7 +1567,9 @@ async def upload_and_process_documents(
                             "processed_with": "markitdown_enhanced",
                             "model_used": model_name,
                             "timestamp": str(uuid.uuid4()),
-                            "images_stored": store_images
+                            "images_stored": store_images,
+                            "openai_api_used": bool(openai_api_key),
+                            "multi_model_vision": run_all_vision_models  # NEW METADATA
                         }
 
                         if chunk_data["images"]:
@@ -642,11 +1578,6 @@ async def upload_and_process_documents(
                             metadata["image_storage_paths"] = json.dumps([img["storage_path"] for img in chunk_data["images"]])
 
                         chunk_id = f"{doc_id}_chunk_{chunk_data['chunk_index']}"
-
-                        # Sanity check
-                        if "document_id" not in metadata:
-                            logger.error(f"Missing document_id in metadata for chunk {chunk_id}")
-                            continue
 
                         collection.add(
                             documents=[chunk_data["content"]],
@@ -684,7 +1615,9 @@ async def upload_and_process_documents(
             "total_chunks_created": total_chunks,
             "total_images_stored": total_images if store_images else 0,
             "images_directory": IMAGES_DIR,
-            "processed_files": processed_files
+            "processed_files": processed_files,
+            "openai_api_used": bool(openai_api_key),
+            "multi_model_vision_used": run_all_vision_models
         }
 
     except HTTPException:
@@ -692,7 +1625,6 @@ async def upload_and_process_documents(
     except Exception as e:
         logger.error(f"Error in document processing: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing documents: {str(e)}")
-
 
 @app.get("/documents/reconstruct/{document_id}")
 def reconstruct_document(document_id: str, collection_name: str = Query(...)):
@@ -723,15 +1655,19 @@ def reconstruct_document(document_id: str, collection_name: str = Query(...)):
 
         chunks_data.sort(key=lambda x: x["chunk_index"])
 
-        # Reconstruct content
-        reconstructed_content = ""
+        document_name = chunks_data[0]["metadata"].get("document_name", "UNKNOWN")
+        reconstructed_content = f"# Document: {document_name}\n\n"
         all_images = []
         image_counter = 1
 
         for chunk in chunks_data:
             content = chunk["content"]
 
-            # Replace image markers with enhanced markdown
+            page_info = chunk["metadata"].get("page", None)
+            if page_info:
+                content = f"\nPage: {page_info}\n\n" + content
+
+            # Replace image markers with markdown-style descriptions
             if chunk["metadata"].get("has_images"):
                 try:
                     image_filenames = json.loads(chunk["metadata"].get("image_filenames", "[]"))
@@ -739,15 +1675,14 @@ def reconstruct_document(document_id: str, collection_name: str = Query(...)):
                     image_descriptions = json.loads(chunk["metadata"].get("image_descriptions", "[]"))
 
                     for filename, path, desc in zip(image_filenames, image_paths, image_descriptions):
-                        img_url = f"/images/{filename}"
                         markdown_img = (
-                            f"\n\n[Image {image_counter}]: {filename}\n"
-                            f"![Image {image_counter}]({img_url})\n"
-                            f"**Image Description:**\n{desc.strip()}\n"
+                            f"\n\n[Image {image_counter}]:\n"
+                            f"# Description:\n"
+                            f"{desc.strip()}\n"
                         )
                         marker = f"[IMAGE:{filename}]"
                         content = content.replace(marker, markdown_img)
-                        
+
                         all_images.append({
                             "filename": filename,
                             "storage_path": path,
@@ -770,7 +1705,8 @@ def reconstruct_document(document_id: str, collection_name: str = Query(...)):
             "metadata": {
                 "file_type": chunks_data[0]["metadata"].get("file_type"),
                 "total_images": len(all_images),
-                "processing_timestamp": chunks_data[0]["metadata"].get("timestamp")
+                "processing_timestamp": chunks_data[0]["metadata"].get("timestamp"),
+                "openai_api_used": chunks_data[0]["metadata"].get("openai_api_used", False)
             }
         }
 

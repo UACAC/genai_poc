@@ -198,6 +198,7 @@ pull_model() {
 # Pull general models
 echo "Pulling general models..."
 pull_model "llama3"
+pull_model "llava"
 
 echo "Model pulling complete!"
 

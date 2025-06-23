@@ -30,13 +30,19 @@ services:
       - "8020:8020"
     environment:
       - CHROMADB_PERSIST_DIRECTORY=/app/chroma_db_data
+      - OPEN_AI_API_KEY=${OPEN_AI_API_KEY}
+      - OLLAMA_URL=http://ollama:11434
+      - OLLAMA_VISION_MODEL=llava
+      - HUGGINGFACE_VISION_MODEL=Salesforce/blip-image-captioning-base
     env_file:
       - .env
     depends_on:
       - base-poetry-deps
+      - ollama
     volumes:
       - chromadata:/app/chroma_db_data
       - ./stored_images:/app/stored_images
+      - ./.env:/app/.env
     networks:
       - ai_network
 
