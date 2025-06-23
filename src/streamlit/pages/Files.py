@@ -306,7 +306,6 @@ else:
     st.warning("No collections exist. Please create one first.")
     
 st.markdown("---")
-
 # ---- QUERY DOCUMENTS ----
 st.header("Query Documents")
 if collections:
@@ -339,7 +338,7 @@ if collections:
                         
                         # Show document ID for easy reconstruction
                         st.code(f"Document ID: {metadata.get('document_id', 'Unknown')}")
-
+st.markdown("---")
 # ---- BROWSE DOCUMENTS ----
 st.header("Browse Documents in Collection")
 if collections:
@@ -388,7 +387,7 @@ if collections:
                     st.dataframe(df, use_container_width=True)
             else:
                 st.info("No documents found in this collection.")
-
+st.markdown("---")
 # ---- RECONSTRUCT DOCUMENTS ----
 st.header("View Image Processed")
 if collections:
