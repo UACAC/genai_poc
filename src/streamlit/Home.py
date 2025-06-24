@@ -4,7 +4,7 @@ import os
 import nest_asyncio
 import datetime
 import time
-from utils import fetch_collections, get_available_models
+from utils import fetch_collections, get_available_models, reconstruct_document_with_timeout, export_to_docx, get_all_documents_in_collection
 import torch
 
 torch.classes.__path__ = []
@@ -189,10 +189,9 @@ except:
 # MAIN INTERFACE
 # ----------------------------------------------------------------------
 # Chat mode selection
-# Update your main chat mode selection to include the new mode:
 chat_mode = st.radio(
     "Select Mode:",
-    ["💬 Direct Chat", "🤖 AI Agent Simulation", "🛠️ Create Agent", "📊 Session History"],
+    ["💬 Direct Chat", "🤖 AI Agent Simulation", "🛠️ Create Agent", "📄 Document Generator", "📊 Session History"],
     horizontal=True
 )
 
@@ -672,28 +671,6 @@ elif chat_mode == "🤖 AI Agent Simulation":
                     try:
                         status_placeholder.info("Connecting to AI model...")
                         response = requests.post(endpoint, json=payload, timeout=300)
-                        
-                        # if response.ok:
-                        #     result = response.json().get("response", "")
-                        #     status_placeholder.empty()
-                            
-                        #     st.success("Agent Analysis Complete!")
-                        #     st.markdown("### Analysis Results:")
-                        #     st.markdown(result)
-                            
-                        #     if "response_time_ms" in response.json():
-                        #         response_time = response.json()["response_time_ms"]
-                        #         st.caption(f"Response time: {response_time/1000:.2f} seconds")
-                        
-                        # else:
-                        #     status_placeholder.empty()
-                        #     error_detail = response.json().get("detail", response.text) if response.headers.get("content-type") == "application/json" else response.text
-                            
-                        #     if "model" in error_detail and "not found" in error_detail:
-                        #         st.error("Model is loading for the first time. This may take 1-2 minutes. Please try again.")
-                        #         st.info("Tip: The first request to each model takes longer as it loads into memory.")
-                        #     else:
-                        #         st.error(f"Error {response.status_code}: {error_detail}")
                         
                         if response.status_code == 200:
                             result = response.json()
@@ -2044,6 +2021,2065 @@ elif chat_mode == "📊 Session History":
                         
             except Exception as e:
                 st.error(f"Error: {e}")
+
+
+# ----------------------------------------------------------------------
+# DOCUMENT GENERATOR MODE
+# ----------------------------------------------------------------------
+elif chat_mode == "📄 Document Generator":
+    st.markdown("---")
+    st.header("📄 Document Generator")
+    st.info("Create rule development agents, upload templates, and generate comprehensive documentation using AI analysis.")
+    
+    # Document Generator sub-modes
+    doc_gen_mode = st.radio(
+        "Select Action:",
+        ["🤖 Rule Development Agents", "📋 Template Management", "⚙️ Generate Documents", "📊 Generated Documents"],
+        horizontal=True
+    )
+    
+    # ----------------------------------------------------------------------
+    # RULE DEVELOPMENT AGENTS SUB-MODE
+    # ----------------------------------------------------------------------
+    if doc_gen_mode == "🤖 Rule Development Agents":
+        st.subheader("🤖 Rule Development Agents")
+        st.info("Create specialized agents for extracting rules, requirements, and test plans from technical documents.")
+        
+        # Enhanced rule development templates
+        rule_agent_templates = {
+            "Rule Extraction Agent": {
+                "description": "Specialized agent for extracting detailed, testable rules and requirements from technical documents",
+                "system_prompt": """You are a MIL-STD compliance and test planning expert specializing in extracting comprehensive, testable rules from technical documents.
+
+Your expertise includes:
+1. **Rule Identification**: Identify EVERY possible testable rule, specification, constraint, or requirement
+2. **Detailed Analysis**: Extract rules that are extremely detailed, explicit, and step-by-step
+3. **Measurable Criteria**: Include specific measurements, acceptable ranges, and referenced figures/tables
+4. **Test Strategy**: For ambiguous requirements, describe specific test strategies
+5. **Dependency Analysis**: Identify dependencies between rules and requirements
+6. **Conflict Detection**: Detect and resolve conflicts between requirements
+
+**Output Format Requirements:**
+- Use markdown headings and bolded text for organization
+- Generate content-based titles (avoid page numbers)
+- Structure output with Dependencies, Conflicts, and Test Rules sections
+- Number test rules sequentially with detailed steps
+- Include specific measurement criteria and acceptance thresholds
+- Reference applicable standards, figures, and tables
+
+**Analysis Approach:**
+- Extract both explicit and implicit requirements
+- Consider edge cases and boundary conditions
+- Identify verification and validation methods
+- Note any missing information that would affect testing
+- Provide specific test procedures where applicable""",
+            
+            "user_prompt": """Analyze the following technical document section and extract comprehensive testable rules:
+
+{data_sample}
+
+Please provide a detailed rule extraction following this structure:
+
+## [Content-Based Section Title]
+
+**Dependencies:**
+- List detailed dependencies as explicit tests, if any
+
+**Conflicts:**
+- List detected or possible conflicts with recommendations/mitigation steps
+
+**Test Rules:**
+1. [Extremely detailed, step-by-step numbered test rules with specific criteria]
+2. [Include measurement parameters, acceptance ranges, test conditions]
+3. [Reference applicable standards, figures, or tables mentioned]
+
+If no testable rules are found, reply: 'No testable rules in this section.'
+
+Focus on creating rules that are:
+- Specific and measurable
+- Implementable as test procedures
+- Complete with all necessary parameters
+- Traceable to source requirements""",
+            
+            "temperature": 0.2,
+            "max_tokens": 2500
+            },
+            
+            "Test Plan Synthesis Agent": {
+                "description": "Agent specialized in combining multiple rule sets into comprehensive test plans",
+                "system_prompt": """You are a senior QA documentation engineer specializing in synthesizing complex test plans from multiple rule sources.
+
+Your expertise includes:
+1. **Test Plan Integration**: Combine multiple rule sets into coherent test plans
+2. **Cross-Reference Analysis**: Identify overlapping content and merge similar steps
+3. **Dependency Management**: Map dependencies between different sections and requirements
+4. **Conflict Resolution**: Identify and resolve conflicts between different rule sources
+5. **Test Organization**: Structure tests in logical execution order
+6. **Coverage Analysis**: Ensure comprehensive coverage of all requirements
+
+**Synthesis Methodology:**
+- Merge similar test steps and eliminate redundancy
+- Cross-reference overlapping content between sections
+- Organize tests by logical execution sequence
+- Identify prerequisite tests and setup requirements
+- Group related test procedures for efficiency
+- Maintain traceability to original requirements
+
+**Output Standards:**
+- Use content-based titles that reflect actual test scope
+- Maintain markdown formatting with clear sections
+- Provide explicit step-by-step test procedures
+- Include setup, execution, and verification steps
+- Note any special equipment or conditions required
+- Cross-reference related test procedures""",
+            
+            "user_prompt": """You are provided with detailed test rules from multiple sections. Synthesize these into a single, comprehensive test plan:
+
+{data_sample}
+
+Create a combined test plan with this structure:
+
+## [Content-Based Test Plan Title]
+
+**Test Dependencies:**
+- List prerequisite tests and setup requirements
+- Note any equipment or environmental conditions needed
+
+**Conflict Resolution:**
+- Address any conflicts between different rule sources
+- Provide recommended resolution approaches
+
+**Integrated Test Procedures:**
+1. [Comprehensive, step-by-step test procedures]
+2. [Merge similar steps, eliminate redundancy]
+3. [Organize in logical execution order]
+4. [Include setup, execution, and verification phases]
+
+**Cross-References:**
+- Map relationships between different test procedures
+- Note shared requirements and common verification steps
+
+Focus on creating a test plan that is:
+- Logically organized and executable
+- Comprehensive in coverage
+- Efficient in execution order
+- Clear in requirements and procedures""",
+            
+            "temperature": 0.3,
+            "max_tokens": 3000
+            },
+            
+            "Document Section Analyzer": {
+                "description": "Agent for analyzing document sections and preparing structured analysis",
+                "system_prompt": """You are a technical document analysis expert specializing in structured content extraction and preparation.
+
+Your capabilities include:
+1. **Content Classification**: Identify types of content (requirements, procedures, specifications, etc.)
+2. **Section Analysis**: Extract key topics, themes, and technical focus areas
+3. **Structure Mapping**: Understand document hierarchy and relationships
+4. **Content Preparation**: Prepare content for further analysis by other specialized agents
+5. **Metadata Extraction**: Identify references, figures, tables, and cross-references
+
+**Analysis Framework:**
+- Identify the primary purpose and scope of each section
+- Extract technical specifications and requirements
+- Note procedural steps and methodologies
+- Identify measurement criteria and acceptance standards
+- Map relationships to other document sections
+- Highlight areas needing further clarification
+
+**Content Organization:**
+- Categorize content by type (functional, performance, interface, etc.)
+- Identify compliance requirements and standards references
+- Extract numerical values, ranges, and specifications
+- Note any conditional or situational requirements
+- Highlight critical vs. optional requirements""",
+            
+            "user_prompt": """Analyze the following document section and provide structured analysis:
+
+{data_sample}
+
+Provide analysis in this format:
+
+## Section Analysis: [Content-Based Title]
+
+**Content Type:**
+- Identify the primary type of content (requirements, procedures, specifications, etc.)
+
+**Key Topics:**
+- List main topics and technical focus areas
+- Note any specialized terminology or concepts
+
+**Technical Specifications:**
+- Extract specific measurements, values, and criteria
+- List any referenced standards or specifications
+
+**Requirements Identified:**
+- Functional requirements
+- Performance requirements  
+- Interface requirements
+- Constraint requirements
+
+**References and Dependencies:**
+- Note any figures, tables, or cross-references mentioned
+- Identify dependencies on other sections or documents
+
+**Analysis Notes:**
+- Areas requiring clarification
+- Potential ambiguities or interpretation issues
+- Recommendations for further analysis
+
+This analysis will be used by specialized rule extraction agents.""",
+                
+                "temperature": 0.2,
+                "max_tokens": 2000
+            }
+        }
+        
+        available_models = st.session_state.available_models or get_available_models_cached()
+
+        
+        # Quick Setup Section - Create All Predefined Agents
+        # st.subheader("🚀 Quick Setup - Create All Predefined Agents")
+        # st.info("Create all three specialized rule development agents with one click.")
+        
+        # col1_quick, col2_quick = st.columns([3, 1])
+        
+        # with col1_quick:
+        #     # Model selection for bulk creation
+        #     available_models = st.session_state.available_models or get_available_models_cached()
+        #     if available_models:
+        #         bulk_model = st.selectbox(
+        #             "Model for all predefined agents:",
+        #             available_models,
+        #             key="bulk_model_select"
+        #         )
+        #     else:
+        #         st.error("No models available")
+        #         bulk_model = None
+        
+        # with col2_quick:
+        #     if st.button("🚀 Create All 3 Agents", type="primary"):
+        #         if not bulk_model:
+        #             st.error("Please select a model first")
+        #         else:
+        #             creation_results = []
+                    
+        #             with st.spinner("Creating all predefined agents..."):
+        #                 for template_name, template_config in rule_agent_templates.items():
+        #                     agent_name = f"{template_name} - Auto"
+                            
+        #                     payload = {
+        #                         "name": agent_name,
+        #                         "model_name": bulk_model,
+        #                         "system_prompt": template_config["system_prompt"],
+        #                         "user_prompt_template": template_config["user_prompt"],
+        #                         "temperature": template_config["temperature"],
+        #                         "max_tokens": template_config["max_tokens"]
+        #                     }
+                            
+        #                     try:
+        #                         response = requests.post(
+        #                             f"{FASTAPI_URL}/create-agent", 
+        #                             json=payload, 
+        #                             timeout=30
+        #                         )
+                                
+        #                         if response.status_code == 200:
+        #                             result = response.json()
+        #                             creation_results.append({
+        #                                 'name': agent_name,
+        #                                 'status': 'success',
+        #                                 'id': result.get('agent_id', 'Unknown')
+        #                             })
+        #                         else:
+        #                             error_detail = response.json().get("detail", response.text)
+        #                             creation_results.append({
+        #                                 'name': agent_name,
+        #                                 'status': 'error',
+        #                                 'message': error_detail
+        #                             })
+                            
+        #                     except Exception as e:
+        #                         creation_results.append({
+        #                             'name': agent_name,
+        #                             'status': 'error',
+        #                             'message': str(e)
+        #                         })
+                    
+        #             # Display results
+        #             success_count = 0
+        #             for result in creation_results:
+        #                 if result['status'] == 'success':
+        #                     st.success(f"{result['name']} (ID: {result['id']})")
+        #                     success_count += 1
+        #                 else:
+        #                     st.error(f"{result['name']}: {result.get('message', 'Unknown error')}")
+                    
+        #             if success_count > 0:
+        #                 st.balloons()
+        #                 st.success(f"🎉 Created {success_count} agents successfully!")
+                        
+        #                 # Clear session state to force refresh
+        #                 if 'current_rule_agents' in st.session_state:
+        #                     del st.session_state.current_rule_agents
+        #                 if 'agents_data' in st.session_state:
+        #                     st.session_state.agents_data = []
+        
+        # st.markdown("---")
+        
+        # Manual Agent Creation Section - WITH PROPER TEMPLATE HANDLING
+        st.subheader("🛠️ Agent Creation")
+        st.info("Create individual specialized agents with custom configurations.")
+        
+        # Template selection OUTSIDE the form to allow dynamic updates
+        col1_pre, col2_pre = st.columns([2, 1])
+        
+        with col1_pre:
+            selected_template = st.selectbox(
+                "Choose Agent Template:",
+                ["Custom"] + list(rule_agent_templates.keys()),
+                key="template_selector",
+                help="Select a template to auto-populate the form fields"
+            )
+        
+        with col2_pre:
+            if selected_template != "Custom":
+                template_info = rule_agent_templates[selected_template]
+                st.info(f"**{selected_template}**: {template_info['description']}")
+        
+        # Get template defaults based on selection
+        if selected_template != "Custom":
+            template = rule_agent_templates[selected_template]
+            default_system_prompt = template["system_prompt"]
+            default_user_prompt = template["user_prompt"]
+            default_temp = template.get("temperature", 0.3)
+            default_tokens = template.get("max_tokens", 2000)
+            default_name = f"Custom {selected_template}"
+        else:
+            default_system_prompt = ""
+            default_user_prompt = ""
+            default_temp = 0.3
+            default_tokens = 2000
+            default_name = ""
+        
+        # Form with proper template integration
+        with st.form("create_custom_rule_agent", clear_on_submit=False):
+            col1, col2 = st.columns([1, 1])
+            
+            with col1:
+                rule_agent_name = st.text_input(
+                    "Agent Name",
+                    value=default_name,
+                    placeholder="e.g., Custom MIL-STD Extractor"
+                )
+                
+                # Model selection
+                if available_models:
+                    rule_agent_model = st.selectbox("Model", available_models, key="custom_model")
+                else:
+                    st.error("No models available")
+                    rule_agent_model = None
+                
+                # Advanced settings in the left column
+                st.subheader("⚙️ Configuration")
+                
+                rule_temperature = st.slider(
+                    "Temperature", 
+                    0.0, 1.0, 
+                    default_temp, 
+                    0.1,
+                    help="Lower = more consistent, Higher = more creative"
+                )
+                
+                rule_max_tokens = st.number_input(
+                    "Max Tokens", 
+                    100, 4000, 
+                    default_tokens, 
+                    100,
+                    help="Maximum response length"
+                )
+            
+            with col2:
+                rule_system_prompt = st.text_area(
+                    "System Prompt (Define Agent's Role & Expertise)",
+                    value=default_system_prompt,
+                    height=300,
+                    help="Define the agent's expertise and approach",
+                    placeholder="You are an expert specializing in..."
+                )
+                
+                rule_user_prompt = st.text_area(
+                    "User Prompt Template",
+                    value=default_user_prompt,
+                    height=200,
+                    help="Must include {data_sample} placeholder",
+                    placeholder="Analyze the following:\n\n{data_sample}\n\nProvide analysis..."
+                )
+            
+            # Validation indicators
+            col1_val, col2_val = st.columns(2)
+            
+            with col1_val:
+                if rule_agent_name and len(rule_agent_name.strip()) >= 3:
+                    st.success("✅ Agent name valid")
+                else:
+                    st.error("❌ Agent name too short")
+            
+            with col2_val:
+                if "{data_sample}" in rule_user_prompt:
+                    st.success("✅ User prompt has {data_sample}")
+                else:
+                    st.error("❌ Missing {data_sample} placeholder")
+            
+            # Create button
+            col1_btn, col2_btn, col3_btn = st.columns([1, 2, 1])
+            
+            with col2_btn:
+                rule_create_submitted = st.form_submit_button(
+                    "🤖 Create Custom Agent", 
+                    type="primary",
+                    use_container_width=True
+                )
+            
+            if rule_create_submitted:
+                # Comprehensive validation
+                validation_errors = []
+                
+                if not rule_agent_name or len(rule_agent_name.strip()) < 3:
+                    validation_errors.append("Agent name must be at least 3 characters")
+                
+                if not rule_system_prompt or len(rule_system_prompt.strip()) < 50:
+                    validation_errors.append("System prompt must be substantial (at least 50 characters)")
+                
+                if "{data_sample}" not in rule_user_prompt:
+                    validation_errors.append("User prompt must include {data_sample} placeholder")
+                
+                if not rule_agent_model:
+                    validation_errors.append("Please select a valid model")
+                
+                if validation_errors:
+                    st.error("**Validation Errors:**")
+                    for error in validation_errors:
+                        st.error(f"• {error}")
+                else:
+                    payload = {
+                        "name": rule_agent_name.strip(),
+                        "model_name": rule_agent_model,
+                        "system_prompt": rule_system_prompt.strip(),
+                        "user_prompt_template": rule_user_prompt.strip(),
+                        "temperature": rule_temperature,
+                        "max_tokens": rule_max_tokens
+                    }
+                    
+                    try:
+                        with st.spinner("Creating custom rule development agent..."):
+                            response = requests.post(f"{FASTAPI_URL}/create-agent", json=payload, timeout=30)
+                            
+                            if response.status_code == 200:
+                                result = response.json()
+                                st.success(f"Custom agent '{rule_agent_name}' created successfully!")
+                                st.info(f"Agent ID: {result.get('agent_id', 'Unknown')}")
+                                st.info(f"Model: {rule_agent_model}")
+                                st.info(f"Temperature: {rule_temperature}")
+                                
+                                # Clear cached data to show new agent
+                                if 'current_rule_agents' in st.session_state:
+                                    del st.session_state.current_rule_agents
+                                if 'agents_data' in st.session_state:
+                                    st.session_state.agents_data = []
+                                
+                                st.balloons()
+                                    
+                            else:
+                                error_detail = response.json().get("detail", response.text) if response.headers.get("content-type") == "application/json" else response.text
+                                
+                                if "already exists" in error_detail.lower():
+                                    st.error(f"Agent name '{rule_agent_name}' already exists. Please choose a different name.")
+                                else:
+                                    st.error(f"Failed to create agent: {error_detail}")
+                    except Exception as e:
+                        st.error(f"Error: {str(e)}")
+        
+        st.markdown("---")
+        
+        # Agent Management Section
+        st.subheader("📋 Manage Rule Development Agents")
+        
+        col1_mgmt, col2_mgmt = st.columns([1, 1])
+        
+        with col1_mgmt:
+            if st.button("🔄 Load All Agents", key="load_all_agents"):
+                try:
+                    with st.spinner("Loading all agents..."):
+                        agents_response = requests.get(f"{FASTAPI_URL}/get-agents", timeout=10)
+                        if agents_response.status_code == 200:
+                            all_agents = agents_response.json().get("agents", [])
+                            st.session_state.current_rule_agents = all_agents
+                            st.success(f"Loaded {len(all_agents)} total agents")
+                        else:
+                            st.error("Failed to load agents")
+                except Exception as e:
+                    st.error(f"Error: {e}")
+        
+        with col2_mgmt:
+            if 'current_rule_agents' in st.session_state:
+                total_agents = len(st.session_state.current_rule_agents)
+                rule_related = sum(1 for agent in st.session_state.current_rule_agents 
+                                if any(keyword in agent['name'].lower() 
+                                    for keyword in ['rule', 'test', 'document', 'analysis', 'extract', 'auto']))
+                st.metric("Total Agents", total_agents, delta=f"{rule_related} rule-related")
+        
+        # Display current agents
+        if 'current_rule_agents' in st.session_state and st.session_state.current_rule_agents:
+            agents = st.session_state.current_rule_agents
+            
+            # Filter for rule development related agents
+            rule_agents = [agent for agent in agents 
+                        if any(keyword in agent['name'].lower() 
+                                for keyword in ['rule', 'test', 'document', 'analysis', 'extract', 'synthesis', 'auto'])]
+            
+            if rule_agents:
+                st.subheader(f"📊 Rule Development Agents ({len(rule_agents)} found)")
+                
+                # Create enhanced display table
+                agent_display_data = []
+                for agent in rule_agents:
+                    agent_display_data.append({
+                        "Name": agent.get("name", "Unknown"),
+                        "Model": agent.get("model_name", "Unknown"),
+                        "Temperature": f"{agent.get('temperature', 0.7):.1f}",
+                        "Max Tokens": agent.get("max_tokens", 1000),
+                        "Queries": agent.get("total_queries", 0),
+                        "Status": "🟢 Active" if agent.get("is_active", True) else "🔴 Inactive",
+                        "Created": agent.get("created_at", "Unknown")[:10] if agent.get("created_at") else "Unknown"
+                    })
+                
+                st.dataframe(agent_display_data, use_container_width=True, height=300)
+                
+                # Quick Test Section
+                st.subheader("🧪 Test Agent")
+                
+                if rule_agents:
+                    test_agent_choice = st.selectbox(
+                        "Select agent to test:",
+                        [f"{agent['name']} (ID: {agent['id']})" for agent in rule_agents],
+                        key="test_agent_select"
+                    )
+                    
+                    # Sample test content
+                    test_content = st.text_area(
+                        "Test Content:",
+                        value="""4.2.3 Signal Processing Requirements
+
+    The system SHALL process incoming RF signals according to the following specifications:
+
+    4.2.3.1 Frequency Range: The system SHALL operate within the frequency range of 30 MHz to 3 GHz with a tolerance of ±0.1%.
+
+    4.2.3.2 Signal Sensitivity: The minimum detectable signal level SHALL be -110 dBm or better across the entire frequency range.
+
+    4.2.3.3 Processing Time: Signal processing SHALL be completed within 50 milliseconds from signal acquisition to output generation.""",
+                        height=200,
+                        help="Edit this content to test your agent"
+                    )
+                    
+                    if st.button("Run Test", type="secondary"):
+                        if test_agent_choice and test_content:
+                            # Extract agent ID from selection
+                            agent_id = int(test_agent_choice.split("ID: ")[1].rstrip(")"))
+                            agent_name = test_agent_choice.split(" (ID:")[0]
+                            
+                            with st.spinner(f"Testing {agent_name}..."):
+                                try:
+                                    payload = {
+                                        "data_sample": test_content,
+                                        "agent_ids": [agent_id]
+                                    }
+                                    
+                                    response = requests.post(
+                                        f"{FASTAPI_URL}/compliance-check",
+                                        json=payload,
+                                        timeout=60
+                                    )
+                                    
+                                    if response.status_code == 200:
+                                        result = response.json()
+                                        st.success("Test completed successfully!")
+                                        
+                                        # Show test results
+                                        details = result.get("details", {})
+                                        for idx, analysis in details.items():
+                                            st.subheader(f"📋 Results from {analysis.get('agent_name', 'Unknown Agent')}")
+                                            st.markdown(analysis.get("reason", "No analysis generated"))
+                                            
+                                            if "response_time_ms" in result:
+                                                st.caption(f"⏱️ Response time: {result['response_time_ms']}ms")
+                                    else:
+                                        st.error(f"Test failed: HTTP {response.status_code}")
+                                        error_detail = response.json().get("detail", response.text) if response.headers.get("content-type") == "application/json" else response.text
+                                        st.error(f"Error details: {error_detail}")
+                                        
+                                except Exception as e:
+                                    st.error(f"Test error: {str(e)}")
+            
+            else:
+                st.info("No rule development agents found. Create some using the options above!")
+        
+        else:
+            st.info("Click 'Load All Agents' to see existing agents and their status.")
+        
+        # Help Section
+        with st.expander("📚 Rule Development Agent Help & Tips", expanded=False):
+            col1_help, col2_help = st.columns(2)
+            
+            with col1_help:
+                st.markdown("""
+                **Template Guide:**
+                
+                1. **Rule Extraction Agent**
+                - Extracts detailed, testable rules from technical documents
+                - Temperature: 0.2 (consistent extraction)
+                - Best for: Standards, specifications, requirements
+                
+                2. **Test Plan Synthesis Agent**
+                - Combines multiple rule sets into test plans
+                - Temperature: 0.3 (balanced synthesis)
+                - Best for: Creating integrated procedures
+                
+                3. **Document Section Analyzer**
+                - Analyzes document structure and content
+                - Temperature: 0.2 (consistent analysis)
+                - Best for: Initial document assessment
+                """)
+            
+            with col2_help:
+                st.markdown("""
+                **Best Practices:**
+                
+                - **Quick Setup**: Use "Create All 3 Agents" for standard setup
+                - **Template Selection**: Choose templates to auto-populate forms
+                - **Testing**: Always test agents before production use
+                - **Naming**: Use descriptive names for easy identification
+                
+                **Troubleshooting:**
+                
+                - **Template not loading**: Make sure to select template before filling form
+                - **Agent creation fails**: Check model availability and name uniqueness
+                - **Poor results**: Adjust temperature and refine prompts
+                - **Timeout errors**: Reduce max tokens or content size
+                """)
+        
+        # Footer
+        st.markdown("---")
+        st.info("**Next Steps**: After creating agents, use them in '⚙️ Generate Documents' for document analysis!")
+    
+    
+    # ----------------------------------------------------------------------
+    # TEMPLATE MANAGEMENT SUB-MODE  
+    # ----------------------------------------------------------------------
+
+    elif doc_gen_mode == "📋 Template Management":
+        st.subheader("📋 Document Template Management")
+        st.info("Upload and manage document templates for automated rule generation and test plan creation.")
+        
+        # Create tabs for different template management functions
+        template_tab1, template_tab2, template_tab3 = st.tabs([
+            "📤 Upload Templates", 
+            "📚 Browse Templates", 
+            "⚙️ Collection Management"
+        ])
+        
+        # ----------------------------------------------------------------------
+        # UPLOAD TEMPLATES TAB
+        # ----------------------------------------------------------------------
+        with template_tab1:
+            st.subheader("📤 Upload Document Templates")
+            st.info("Upload technical documents, standards, and specifications to use as templates for rule generation.")
+            
+            # Collection Selection/Creation
+            col1_upload, col2_upload = st.columns([3, 1])
+            
+            with col1_upload:
+                template_collection_action = st.radio(
+                    "Collection Action:",
+                    ["📁 Use Existing Collection", "🆕 Create New Collection"],
+                    horizontal=True,
+                    key="template_collection_action"
+                )
+                
+                # Get current collections
+                current_collections = st.session_state.collections or []
+                
+                if template_collection_action == "📁 Use Existing Collection":
+                    if current_collections:
+                        selected_collection = st.selectbox(
+                            "Select existing collection:",
+                            current_collections,
+                            key="existing_template_collection",
+                            help="Choose a collection to add your templates to"
+                        )
+                        target_collection = selected_collection
+                    else:
+                        st.warning("⚠️ No collections available. Please create a new collection first.")
+                        target_collection = None
+                
+                else:  # Create New Collection
+                    new_collection_name = st.text_input(
+                        "New collection name:",
+                        placeholder="e.g., mil-std-templates, iso-standards, technical-specs",
+                        help="Use descriptive names like 'project-templates' or 'standards-library'",
+                        key="new_template_collection_name"
+                    )
+                    
+                    if new_collection_name:
+                        # Validate collection name
+                        if len(new_collection_name.strip()) < 3:
+                            st.warning("Collection name must be at least 3 characters")
+                            target_collection = None
+                        elif not new_collection_name.replace("-", "").replace("_", "").isalnum():
+                            st.warning("Collection name should only contain letters, numbers, hyphens, and underscores")
+                            target_collection = None
+                        else:
+                            # Create collection button
+                            if st.button("🆕 Create Template Collection", type="secondary", key="create_template_collection"):
+                                try:
+                                    with st.spinner("Creating collection..."):
+                                        response = create_collection(new_collection_name.strip())
+                                        
+                                        if response.status_code == 200:
+                                            st.success(f"Collection '{new_collection_name}' created successfully!")
+                                            # Add to session state
+                                            if new_collection_name not in st.session_state.collections:
+                                                st.session_state.collections.append(new_collection_name)
+                                            target_collection = new_collection_name
+                                            st.rerun()
+                                        else:
+                                            error_detail = response.json().get("detail", response.text) if response.headers.get("content-type") == "application/json" else response.text
+                                            if "already exists" in error_detail.lower():
+                                                st.warning(f"Collection '{new_collection_name}' already exists. You can use it for uploads.")
+                                                target_collection = new_collection_name
+                                            else:
+                                                st.error(f"Failed to create collection: {error_detail}")
+                                                target_collection = None
+                                                
+                                except Exception as e:
+                                    st.error(f"Error creating collection: {e}")
+                                    target_collection = None
+                            else:
+                                target_collection = new_collection_name if new_collection_name else None
+                    else:
+                        target_collection = None
+            
+            with col2_upload:
+                # Collection status
+                if current_collections:
+                    st.metric("Available Collections", len(current_collections))
+                else:
+                    st.metric("Available Collections", 0)
+                
+                # Refresh collections button
+                if st.button("Refresh Collections", key="refresh_collections_upload"):
+                    try:
+                        with st.spinner("Refreshing..."):
+                            # Load collections from both sources
+                            chat_collections = fetch_collections()
+                            chromadb_collections = get_chromadb_collections()
+                            
+                            # Combine and deduplicate
+                            all_collections = list(set(chat_collections + chromadb_collections))
+                            st.session_state.collections = all_collections
+                            st.success(f"✅ Found {len(all_collections)} collections")
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"Error refreshing: {e}")
+            
+            # File Upload Section
+            if target_collection:
+                st.markdown("---")
+                st.subheader(f"📎 Upload Files to '{target_collection}'")
+                
+                # File uploader
+                uploaded_files = st.file_uploader(
+                    "Select template files to upload:",
+                    type=['pdf', 'docx', 'txt', 'xlsx', 'pptx', 'html', 'csv', 'md'],
+                    accept_multiple_files=True,
+                    help="Supported formats: PDF, Word, Text, Excel, PowerPoint, HTML, CSV, Markdown",
+                    key="template_file_uploader"
+                )
+                
+                if uploaded_files:
+                    # Display selected files
+                    st.write(f"**📁 Selected files ({len(uploaded_files)}):**")
+                    total_size = 0
+                    
+                    file_data = []
+                    for file in uploaded_files:
+                        file_size = len(file.getvalue()) / 1024 / 1024  # Size in MB
+                        total_size += file_size
+                        file_data.append({
+                            "File Name": file.name,
+                            "Type": file.type,
+                            "Size (MB)": f"{file_size:.2f}"
+                        })
+                    
+                    st.dataframe(file_data, use_container_width=True)
+                    st.info(f"📊 Total size: {total_size:.2f} MB")
+                    
+                    # Processing options
+                    with st.expander("⚙️ Advanced Processing Options", expanded=False):
+                        col1_proc, col2_proc = st.columns(2)
+                        
+                        with col1_proc:
+                            chunk_size = st.number_input(
+                                "Chunk Size", 
+                                min_value=500, 
+                                max_value=3000, 
+                                value=1500,
+                                step=100,
+                                help="Size of text chunks for processing (larger for templates)",
+                                key="template_chunk_size"
+                            )
+                            
+                            chunk_overlap = st.number_input(
+                                "Chunk Overlap", 
+                                min_value=100, 
+                                max_value=500, 
+                                value=300,
+                                step=50,
+                                help="Overlap between consecutive chunks",
+                                key="template_chunk_overlap"
+                            )
+                        
+                        with col2_proc:
+                            store_images = st.checkbox(
+                                "Extract and Store Images", 
+                                value=True,
+                                help="Extract images from documents for analysis",
+                                key="template_store_images"
+                            )
+                            
+                            enhanced_processing = st.checkbox(
+                                "Enhanced Processing", 
+                                value=True,
+                                help="Use advanced AI models for better content extraction",
+                                key="template_enhanced_processing"
+                            )
+                            
+                            # OpenAI Vision option
+                            use_openai_vision = st.checkbox(
+                                "Use OpenAI Vision (Recommended)", 
+                                value=False,
+                                help="Enhanced image analysis using OpenAI models",
+                                key="template_use_openai"
+                            )
+                            
+                            if use_openai_vision:
+                                openai_key = st.text_input(
+                                    "OpenAI API Key:",
+                                    type="password",
+                                    help="Required for OpenAI Vision features",
+                                    key="template_openai_key"
+                                )
+                            else:
+                                openai_key = None
+                    
+                    # Upload button
+                    col1_upload_btn, col2_upload_btn, col3_upload_btn = st.columns([1, 2, 1])
+                    
+                    with col2_upload_btn:
+                        if st.button(
+                            f"Upload {len(uploaded_files)} Template(s)", 
+                            type="primary", 
+                            use_container_width=True,
+                            key="upload_templates_btn"
+                        ):
+                            try:
+                                # Validate inputs
+                                if use_openai_vision and not openai_key:
+                                    st.error("OpenAI API key required for vision features")
+                                else:
+                                    # Progress tracking
+                                    progress_bar = st.progress(0)
+                                    status_text = st.empty()
+                                    
+                                    status_text.text("🔧 Initializing upload...")
+                                    progress_bar.progress(10)
+                                    
+                                    # Prepare upload parameters
+                                    upload_params = {
+                                        "collection_name": target_collection,
+                                        "chunk_size": chunk_size,
+                                        "chunk_overlap": chunk_overlap,
+                                        "store_images": store_images,
+                                        "model_name": "enhanced" if enhanced_processing else "basic",
+                                        "debug_mode": False,
+                                        "run_all_vision_models": enhanced_processing
+                                    }
+                                    
+                                    status_text.text("📦 Preparing documents for processing...")
+                                    progress_bar.progress(25)
+                                    
+                                    # Prepare files for upload
+                                    files_data = []
+                                    for file in uploaded_files:
+                                        files_data.append(("files", (file.name, file.getvalue(), file.type)))
+                                    
+                                    # Prepare headers
+                                    headers = {}
+                                    if use_openai_vision and openai_key:
+                                        headers["X-OpenAI-API-Key"] = openai_key
+                                    
+                                    status_text.text("🚀 Uploading and processing templates...")
+                                    progress_bar.progress(50)
+                                    
+                                    # Make upload request
+                                    response = requests.post(
+                                        f"{CHROMADB_URL}/documents/upload-and-process",
+                                        files=files_data,
+                                        params=upload_params,
+                                        headers=headers,
+                                        timeout=600  # 10 minute timeout for large files
+                                    )
+                                    
+                                    progress_bar.progress(75)
+                                    
+                                    if response.status_code == 200:
+                                        result = response.json()
+                                        progress_bar.progress(100)
+                                        status_text.text("Processing complete!")
+                                        
+                                        st.success("Templates uploaded and processed successfully!")
+                                        
+                                        # Display results
+                                        col1_result, col2_result, col3_result = st.columns(3)
+                                        
+                                        with col1_result:
+                                            st.metric(
+                                                "Files Processed", 
+                                                result.get("total_files_processed", 0)
+                                            )
+                                        
+                                        with col2_result:
+                                            st.metric(
+                                                "Text Chunks Created", 
+                                                result.get("total_chunks_created", 0)
+                                            )
+                                        
+                                        with col3_result:
+                                            st.metric(
+                                                "Images Extracted", 
+                                                result.get("total_images_stored", 0)
+                                            )
+                                        
+                                        # Processing details
+                                        with st.expander("📊 Detailed Processing Results", expanded=False):
+                                            st.json(result)
+                                        
+                                        # Success guidance
+                                        st.info("**Templates are now ready for use!**")
+                                        st.markdown("""
+                                        **Next steps:**
+                                        1. Browse your templates in the 'Browse Templates' tab
+                                        2. Create rule development agents in 'Rule Development Agents'
+                                        3. Generate documents using your templates in 'Generate Documents'
+                                        """)
+                                        
+                                    else:
+                                        progress_bar.progress(0)
+                                        error_detail = response.json().get("detail", response.text) if response.headers.get("content-type") == "application/json" else response.text
+                                        st.error(f"Upload failed: {error_detail}")
+                                        
+                                        # Helpful error suggestions
+                                        if "timeout" in str(error_detail).lower():
+                                            st.info("**Tip**: Large files may take several minutes. Try uploading fewer files at once.")
+                                        elif "connection" in str(error_detail).lower():
+                                            st.info("**Tip**: Check that ChromaDB service is running and accessible.")
+                                        elif "storage" in str(error_detail).lower():
+                                            st.info("**Tip**: You may be running low on storage space.")
+                                    
+                            except requests.exceptions.Timeout:
+                                progress_bar.progress(0)
+                                status_text.text("")
+                                st.error("Upload timed out. Large files require more processing time.")
+                                st.info("**Tip**: Try uploading fewer files at once or reduce file sizes.")
+                                
+                            except Exception as e:
+                                progress_bar.progress(0)
+                                status_text.text("")
+                                st.error(f"Upload failed: {str(e)}")
+                                
+                                # Specific error guidance
+                                if "connection" in str(e).lower():
+                                    st.info("**Troubleshooting**: Ensure ChromaDB service is running")
+                                elif "memory" in str(e).lower():
+                                    st.info("**Troubleshooting**: Try uploading smaller files")
+                
+                else:
+                    st.info("📎 Select files above to begin template upload")
+            
+            else:
+                st.warning("Please select or create a collection before uploading templates.")
+                st.markdown("""
+                **Collection Tips:**
+                - Use descriptive names like `military-standards`, `iso-templates`, or `project-specs`
+                - Group related templates together (e.g., all MIL-STD documents in one collection)
+                - Keep template collections separate from generated documents
+                """)
+        
+        # ----------------------------------------------------------------------
+        # BROWSE TEMPLATES TAB
+        # ----------------------------------------------------------------------
+        with template_tab2:
+            st.subheader("📚 Browse Template Library")
+            st.info("View, preview, and manage your uploaded templates.")
+            
+            # Collection selector for browsing
+            current_collections = st.session_state.collections or []
+            
+            if current_collections:
+                col1_browse, col2_browse = st.columns([3, 1])
+                
+                with col1_browse:
+                    browse_collection = st.selectbox(
+                        "Select collection to browse:",
+                        current_collections,
+                        key="browse_collection_select",
+                        help="Choose a collection to view its templates"
+                    )
+                
+                with col2_browse:
+                    if st.button("📋 Load Templates", key="load_templates_btn"):
+                        try:
+                            with st.spinner("Loading templates..."):
+                                documents = get_all_documents_in_collection(browse_collection)
+                                st.session_state.template_documents = documents
+                                st.session_state.selected_browse_collection = browse_collection
+                                st.success(f"Found {len(documents)} templates in '{browse_collection}'")
+                        except Exception as e:
+                            st.error(f"Error loading templates: {e}")
+                
+                # Display templates if loaded
+                if 'template_documents' in st.session_state and 'selected_browse_collection' in st.session_state:
+                    documents = st.session_state.template_documents
+                    collection_name = st.session_state.selected_browse_collection
+                    
+                    if documents:
+                        st.subheader(f"Templates in '{collection_name}' ({len(documents)})")
+                        
+                        # Templates overview table
+                        template_overview = []
+                        for doc in documents:
+                            template_overview.append({
+                                "Template Name": doc["document_name"],
+                                "File Type": doc["file_type"].upper(),
+                                "Chunks": doc["total_chunks"],
+                                "Images": "Yes" if doc["has_images"] else "No",
+                                "Uploaded": doc["processing_timestamp"][:10] if doc["processing_timestamp"] else "Unknown",
+                                "Document ID": doc["document_id"][:8] + "..."
+                            })
+                        
+                        st.dataframe(template_overview, use_container_width=True, height=400)
+                        
+                        # Template actions
+                        st.markdown("---")
+                        st.subheader("Template Actions")
+                        
+                        # Template selector
+                        template_choices = [f"{doc['document_name']} ({doc['document_id']})" for doc in documents]
+                        selected_template = st.selectbox(
+                            "Select template for actions:",
+                            ["--Select Template--"] + template_choices,
+                            key="template_action_select"
+                        )
+                        
+                        if selected_template != "--Select Template--":
+                            # Extract document ID and name
+                            doc_id = selected_template.split("(")[-1].rstrip(")")
+                            doc_name = selected_template.split(" (")[0]
+                            
+                            # Find the document details
+                            selected_doc = next((doc for doc in documents if doc['document_id'] == doc_id), None)
+                            
+                            if selected_doc:
+                                # Display document metadata
+                                with st.expander(f"Template Details: {doc_name}", expanded=True):
+                                    col1_meta, col2_meta = st.columns(2)
+                                    
+                                    with col1_meta:
+                                        st.json({
+                                            "Document Name": selected_doc["document_name"],
+                                            "File Type": selected_doc["file_type"],
+                                            "Total Chunks": selected_doc["total_chunks"],
+                                            "Has Images": selected_doc["has_images"],
+                                            "Image Count": selected_doc.get("image_count", 0)
+                                        })
+                                    
+                                    with col2_meta:
+                                        st.json({
+                                            "Document ID": selected_doc["document_id"],
+                                            "Processing Timestamp": selected_doc["processing_timestamp"],
+                                            "OpenAI Used": selected_doc.get("openai_api_used", False),
+                                            "Collection": collection_name
+                                        })
+                                
+                                # Action buttons
+                                col1_action, col2_action, col3_action = st.columns(3)
+                                
+                                with col1_action:
+                                    if st.button("👁️ Preview Template", key="preview_template_btn"):
+                                        try:
+                                            with st.spinner("Loading template preview..."):
+                                                result = reconstruct_document_with_timeout(doc_id, collection_name, timeout=120)
+                                                
+                                                st.subheader(f"📄 Preview: {result['document_name']}")
+                                                
+                                                # Content preview (first 3000 characters)
+                                                content = result['reconstructed_content']
+                                                preview_content = content[:3000]
+                                                
+                                                st.text_area(
+                                                    f"Template Content (showing first 3000 of {len(content)} characters):",
+                                                    preview_content + ("..." if len(content) > 3000 else ""),
+                                                    height=400,
+                                                    disabled=True,
+                                                    key="template_preview_content"
+                                                )
+                                                
+                                                # Show images if any
+                                                if result.get('images'):
+                                                    st.subheader(f"Images ({len(result['images'])})")
+                                                    for i, img in enumerate(result['images'][:3]):  # Show first 3 images
+                                                        st.caption(f"Image {i+1}: {img.get('description', 'No description')}")
+                                                
+                                        except Exception as e:
+                                            st.error(f"Preview error: {e}")
+                                
+                                with col2_action:
+                                    if st.button("Download Template", key="download_template_btn"):
+                                        try:
+                                            with st.spinner("Preparing download..."):
+                                                result = reconstruct_document_with_timeout(doc_id, collection_name, timeout=120)
+                                                
+                                                # Create DOCX download
+                                                docx_path = export_to_docx(result)
+                                                
+                                                with open(docx_path, "rb") as file:
+                                                    st.download_button(
+                                                        label="💾 Download as DOCX",
+                                                        data=file.read(),
+                                                        file_name=f"{result['document_name']}.docx",
+                                                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                                        key="download_template_docx"
+                                                    )
+                                                
+                                                # Cleanup
+                                                import os
+                                                os.unlink(docx_path)
+                                                
+                                                st.success("Download ready!")
+                                                
+                                        except Exception as e:
+                                            st.error(f"Download error: {e}")
+                                
+                                # with col3_action:
+                                #     if st.button("Analyze with Agent", key="analyze_template_btn"):
+                                #         st.markdown("""
+                                #         **For now, you can:**
+                                #         1. Go to '⚙️ Generate Documents'
+                                #         2. Select this collection as source
+                                #         3. Choose this template for analysis
+                                #         """)
+                    
+                    else:
+                        st.info(f"No templates found in collection '{collection_name}'")
+                        st.markdown("""
+                        **Tips:**
+                        - Upload templates using the 'Upload Templates' tab
+                        - Check that the collection name is correct
+                        - Ensure templates were successfully processed
+                        """)
+                
+                else:
+                    st.info("Click 'Load Templates' to view templates in the selected collection")
+            
+            else:
+                st.warning("No collections available.")
+                st.markdown("""
+                **To get started:**
+                1. Click 'Refresh Collections' in the upload tab
+                2. Create a new collection
+                3. Upload your first templates
+                """)
+        
+        # ----------------------------------------------------------------------
+        # COLLECTION MANAGEMENT TAB
+        # ----------------------------------------------------------------------
+        with template_tab3:
+            st.subheader("⚙️ Collection Management")
+            st.info("Manage your template collections and monitor storage usage.")
+            
+            # Refresh collections
+            if st.button("Refresh All Collections", key="refresh_all_collections"):
+                try:
+                    with st.spinner("Loading collections from all sources..."):
+                        # Load from both FastAPI and ChromaDB
+                        chat_collections = fetch_collections()
+                        chromadb_collections = get_chromadb_collections()
+                        
+                        # Combine and deduplicate
+                        all_collections = list(set(chat_collections + chromadb_collections))
+                        st.session_state.collections = all_collections
+                        
+                        st.success(f"Found {len(all_collections)} collections total")
+                        st.info(f"FastAPI: {len(chat_collections)}, ChromaDB: {len(chromadb_collections)}")
+                        
+                except Exception as e:
+                    st.error(f"Error refreshing collections: {e}")
+            
+            # Display collections with stats
+            current_collections = st.session_state.collections or []
+            
+            if current_collections:
+                st.subheader(f"📁 Available Collections ({len(current_collections)})")
+                
+                # Load detailed stats for each collection
+                if st.button("📊 Load Collection Statistics", key="load_collection_stats"):
+                    collection_stats = []
+                    
+                    progress_bar = st.progress(0)
+                    
+                    for i, collection in enumerate(current_collections):
+                        try:
+                            # Update progress
+                            progress_bar.progress((i + 1) / len(current_collections))
+                            
+                            # Get collection documents
+                            documents = get_all_documents_in_collection(collection)
+                            
+                            # Calculate stats
+                            total_docs = len(documents)
+                            total_chunks = sum(doc.get("total_chunks", 0) for doc in documents)
+                            has_images = sum(1 for doc in documents if doc.get("has_images", False))
+                            
+                            # File type breakdown
+                            file_types = {}
+                            for doc in documents:
+                                file_type = doc.get("file_type", "unknown")
+                                file_types[file_type] = file_types.get(file_type, 0) + 1
+                            
+                            collection_stats.append({
+                                "Collection Name": collection,
+                                "Documents": total_docs,
+                                "Total Chunks": total_chunks,
+                                "With Images": has_images,
+                                "File Types": ", ".join([f"{k}({v})" for k, v in file_types.items()]) if file_types else "None",
+                                "Avg Chunks/Doc": round(total_chunks / total_docs, 1) if total_docs > 0 else 0
+                            })
+                            
+                        except Exception as e:
+                            collection_stats.append({
+                                "Collection Name": collection,
+                                "Documents": "Error",
+                                "Total Chunks": "Error", 
+                                "With Images": "Error",
+                                "File Types": f"Error: {str(e)}",
+                                "Avg Chunks/Doc": "Error"
+                            })
+                    
+                    progress_bar.progress(1.0)
+                    st.session_state.collection_stats = collection_stats
+                
+                # Display stats if available
+                if 'collection_stats' in st.session_state:
+                    st.dataframe(st.session_state.collection_stats, use_container_width=True, height=400)
+                    
+                    # Summary metrics
+                    if st.session_state.collection_stats:
+                        try:
+                            total_documents = sum(stat["📄 Documents"] for stat in st.session_state.collection_stats if isinstance(stat["📄 Documents"], int))
+                            total_chunks = sum(stat["🧩 Total Chunks"] for stat in st.session_state.collection_stats if isinstance(stat["🧩 Total Chunks"], int))
+                            
+                            col1_summary, col2_summary, col3_summary = st.columns(3)
+                            
+                            with col1_summary:
+                                st.metric("Total Collections", len(current_collections))
+                            with col2_summary:
+                                st.metric("Total Documents", total_documents)
+                            with col3_summary:
+                                st.metric("Total Chunks", total_chunks)
+                                
+                        except Exception as e:
+                            st.info("Summary metrics calculation failed - some collections may have errors")
+                
+                # Collection Actions
+                st.markdown("---")
+                st.subheader("🛠️ Collection Actions")
+                
+                selected_collection_mgmt = st.selectbox(
+                    "Select collection for management:",
+                    ["--Select Collection--"] + current_collections,
+                    key="collection_mgmt_select"
+                )
+                
+                if selected_collection_mgmt != "--Select Collection--":
+                    col1_mgmt_action, col2_mgmt_action = st.columns(2)
+                    
+                    with col1_mgmt_action:
+                        if st.button("View Collection Details", key="view_collection_details"):
+                            try:
+                                with st.spinner("Loading collection details..."):
+                                    documents = get_all_documents_in_collection(selected_collection_mgmt)
+                                    
+                                    st.subheader(f"📋 Details for '{selected_collection_mgmt}'")
+                                    
+                                    if documents:
+                                        # Document list
+                                        doc_list = []
+                                        for doc in documents:
+                                            doc_list.append({
+                                                "Name": doc["document_name"],
+                                                "Type": doc["file_type"],
+                                                "Chunks": doc["total_chunks"],
+                                                "Images": "✅" if doc["has_images"] else "❌",
+                                                "Uploaded": doc["processing_timestamp"][:10] if doc["processing_timestamp"] else "Unknown"
+                                            })
+                                        
+                                        st.dataframe(doc_list, use_container_width=True)
+                                    else:
+                                        st.info("Collection is empty")
+                                        
+                            except Exception as e:
+                                st.error(f"Error loading details: {e}")
+                    
+
+            
+            else:
+                st.info("📭 No collections found.")
+                st.markdown("""
+                **Getting Started:**
+                1. Go to 'Upload Templates' tab
+                2. Create your first collection  
+                3. Upload template documents
+                4. Return here to manage collections
+                """)
+        
+        # Help section for Template Management
+        st.markdown("---")
+        with st.expander("📚 Template Management Help & Best Practices", expanded=False):
+            col1_help, col2_help = st.columns(2)
+            
+            with col1_help:
+                st.markdown("""
+                **Uploading Templates:**
+                
+                - **Supported Formats**: PDF, DOCX, TXT, XLSX, PPTX, HTML, CSV, MD
+                - **File Size**: Recommended under 50MB per file
+                - **Batch Upload**: Can upload multiple files at once
+                - **Processing**: Enhanced mode provides better extraction
+                - **Images**: Enable image extraction for visual content
+                
+                **Collection Organization:**
+                
+                - **Naming**: Use descriptive names like `mil-standards`, `iso-docs`
+                - **Grouping**: Keep related templates together
+                - **Separation**: Keep templates separate from generated documents
+                - **Purpose**: One collection per project or standard type
+                """)
+            
+            with col2_help:
+                st.markdown("""
+                **Best Practices:**
+                
+                - **Quality**: Upload clean, well-formatted documents
+                - **Structure**: Maintain consistent file naming
+                - **Metadata**: Include version info in filenames
+                - **Updates**: Re-upload when templates change
+                - **Testing**: Preview templates after upload
+                
+                **Performance Tips:**
+                
+                - **Chunk Size**: Use 1500+ for technical documents
+                - **Overlap**: Higher overlap (300) for better context
+                - **Processing**: Enable enhanced mode for better results
+                - **Batch Size**: Upload 5-10 files at once for stability
+                - **Monitoring**: Check collection stats regularly
+                
+                **Troubleshooting:**
+                
+                - **Upload Fails**: Check file size and format
+                - **Processing Slow**: Large files take more time
+                - **Missing Content**: Verify file isn't corrupted
+                - **No Images**: Enable image extraction option
+                """)
+        
+        # Footer for Template Management
+        st.markdown("---")
+        st.info("**Next Steps**: After uploading templates, use them in '⚙️ Generate Documents' to create rule extractions and test plans!")
+    
+    # ----------------------------------------------------------------------
+    # GENERATE DOCUMENTS SUB-MODE
+    # ----------------------------------------------------------------------
+    # Replace your Generate Documents section with this enhanced version
+
+    elif doc_gen_mode == "⚙️ Generate Documents":
+        st.subheader("⚙️ Generate Documents")
+        st.info("Use rule development agents to analyze templates and generate comprehensive documentation.")
+        
+        # Create a workflow with clear steps
+        st.markdown("### Document Generation Workflow")
+        
+        # Step 1: Load and Select Agents
+        st.markdown("#### Step 1: Select Rule Development Agents")
+        
+        col1_agents, col2_agents = st.columns([3, 1])
+        
+        with col1_agents:
+            if st.button("Load Available Agents", key="load_agents_generate"):
+                try:
+                    with st.spinner("Loading agents..."):
+                        agents_response = requests.get(f"{FASTAPI_URL}/get-agents", timeout=10)
+                        if agents_response.status_code == 200:
+                            all_agents = agents_response.json().get("agents", [])
+                            # Filter for rule development agents
+                            rule_agents = [agent for agent in all_agents 
+                                        if any(keyword in agent['name'].lower() 
+                                            for keyword in ['rule', 'test', 'document', 'analysis', 'extract', 'synthesis', 'auto'])]
+                            
+                            st.session_state.available_rule_agents = rule_agents
+                            st.session_state.all_agents_generate = all_agents
+                            st.success(f"Loaded {len(rule_agents)} rule development agents ({len(all_agents)} total)")
+                        else:
+                            st.error("Failed to load agents")
+                except Exception as e:
+                    st.error(f"Error: {e}")
+        
+        with col2_agents:
+            if 'available_rule_agents' in st.session_state:
+                rule_count = len(st.session_state.available_rule_agents)
+                total_count = len(st.session_state.get('all_agents_generate', []))
+                st.metric("Rule Agents", rule_count, delta=f"{total_count} total")
+        
+        # Agent Selection Interface
+        if 'available_rule_agents' in st.session_state and st.session_state.available_rule_agents:
+            agents = st.session_state.available_rule_agents
+            
+            # Display available agents
+            with st.expander("Available Rule Development Agents", expanded=False):
+                agent_display = []
+                for agent in agents:
+                    agent_display.append({
+                        "Agent Name": agent.get("name", "Unknown"),
+                        "Model": agent.get("model_name", "Unknown"),
+                        "Temperature": f"{agent.get('temperature', 0.7):.1f}",
+                        "Queries": agent.get("total_queries", 0),
+                        "Status": "🟢 Active" if agent.get("is_active", True) else "🔴 Inactive"
+                    })
+                st.dataframe(agent_display, use_container_width=True)
+            
+            # Agent selection
+            agent_choices = {f"{agent['name']} ({agent['model_name']})": agent["id"] for agent in agents}
+            
+            selected_rule_agents = st.multiselect(
+                "Choose agents for document generation:",
+                list(agent_choices.keys()),
+                help="Select multiple agents for comprehensive analysis from different perspectives",
+                key="selected_agents_generate"
+            )
+            
+            if selected_rule_agents:
+                st.success(f"✅ Selected {len(selected_rule_agents)} agents for generation")
+                
+                # Show selected agents details
+                with st.expander("📋 Selected Agents Details", expanded=False):
+                    for agent_name in selected_rule_agents:
+                        agent_id = agent_choices[agent_name]
+                        agent_data = next((a for a in agents if a["id"] == agent_id), None)
+                        if agent_data:
+                            st.write(f"**{agent_data['name']}** - {agent_data['model_name']} (Temp: {agent_data.get('temperature', 0.7)})")
+            
+            st.markdown("---")
+            
+            # Step 2: Select Template Source Collection
+            st.markdown("#### Step 2: Select Template Source Collection")
+            
+            template_collections = st.session_state.collections or []
+            
+            if template_collections:
+                col1_collection, col2_collection = st.columns([3, 1])
+                
+                with col1_collection:
+                    source_collection = st.selectbox(
+                        "Template collection to analyze:",
+                        template_collections,
+                        help="Choose the collection containing your template documents",
+                        key="source_collection_select"
+                    )
+                
+                with col2_collection:
+                    if st.button("Load Documents", key="load_docs_from_collection"):
+                        try:
+                            with st.spinner("Loading documents from collection..."):
+                                documents = get_all_documents_in_collection(source_collection)
+                                st.session_state.source_documents = documents
+                                st.session_state.selected_source_collection = source_collection
+                                st.success(f"Found {len(documents)} documents in '{source_collection}'")
+                        except Exception as e:
+                            st.error(f"Error loading documents: {e}")
+                
+                # Display collection info if available
+                if 'source_documents' in st.session_state and 'selected_source_collection' in st.session_state:
+                    documents = st.session_state.source_documents
+                    collection_name = st.session_state.selected_source_collection
+                    
+                    st.info(f"📊 Collection '{collection_name}' contains {len(documents)} documents")
+            
+            else:
+                st.warning("No collections available. Please upload templates first in 'Template Management'.")
+                st.markdown("""
+                **To get started:**
+                1. Go to 'Template Management'
+                2. Upload your template documents
+                3. Return here to generate documents
+                """)
+            
+            # Step 3: Document Selection and Preview
+            if 'source_documents' in st.session_state and st.session_state.source_documents:
+                documents = st.session_state.source_documents
+                collection_name = st.session_state.selected_source_collection
+                
+                st.markdown("---")
+                st.markdown("#### Step 3: 📑 Select Source Documents")
+                
+                # Document overview table
+                st.subheader(f"📚 Documents in '{collection_name}'")
+                
+                doc_overview = []
+                for doc in documents:
+                    doc_overview.append({
+                        "Document Name": doc["document_name"],
+                        "File Type": doc["file_type"].upper(),
+                        "Chunks": doc["total_chunks"],
+                        "Images": "✅" if doc["has_images"] else "❌",
+                        "Uploaded": doc["processing_timestamp"][:10] if doc["processing_timestamp"] else "Unknown",
+                        "Document ID": doc["document_id"][:12] + "..."
+                    })
+                
+                st.dataframe(doc_overview, use_container_width=True, height=300)
+                
+                # Document selection with enhanced interface
+                st.subheader("Document Selection")
+                
+                # Selection method choice
+                selection_method = st.radio(
+                    "Document selection method:",
+                    ["Select Specific Documents", "Select All Documents", "Filter and Select"],
+                    horizontal=True,
+                    key="selection_method"
+                )
+                
+                selected_documents = []
+                
+                if selection_method == "Select Specific Documents":
+                    # Individual document selection
+                    doc_choices = {f"{doc['document_name']} ({doc['document_id'][:8]}...)": doc['document_id'] for doc in documents}
+                    
+                    selected_documents = st.multiselect(
+                        "Choose specific documents to analyze:",
+                        list(doc_choices.keys()),
+                        help="Select one or more documents for analysis",
+                        key="specific_documents_select"
+                    )
+                    
+                    # Document preview for selected items
+                    if selected_documents:
+                        st.success(f"Selected {len(selected_documents)} documents")
+                        
+                        # Preview option
+                        if len(selected_documents) == 1:
+                            doc_name = selected_documents[0]
+                            doc_id = doc_choices[doc_name]
+                            
+                            if st.button("Preview Selected Document", key="preview_single_doc"):
+                                try:
+                                    with st.spinner("Loading document preview..."):
+                                        result = reconstruct_document_with_timeout(doc_id, collection_name, timeout=60)
+                                        
+                                        with st.expander(f"Preview: {result['document_name']}", expanded=True):
+                                            content = result['reconstructed_content']
+                                            preview_content = content[:2000]
+                                            
+                                            st.text_area(
+                                                f"Document Content (showing first 2000 of {len(content)} characters):",
+                                                preview_content + ("..." if len(content) > 2000 else ""),
+                                                height=300,
+                                                disabled=True,
+                                                key="doc_preview_content"
+                                            )
+                                            
+                                            if result.get('images'):
+                                                st.caption(f"🖼️ Contains {len(result['images'])} images")
+                                                
+                                except Exception as e:
+                                    st.error(f"Preview error: {e}")
+                
+                elif selection_method == "Select All Documents":
+                    # Select all documents
+                    if st.button("Select All Documents", key="select_all_docs"):
+                        selected_documents = list(doc_choices.keys())
+                        st.session_state.selected_all_docs = selected_documents
+                        st.success(f"Selected all {len(documents)} documents")
+                    
+                    if 'selected_all_docs' in st.session_state:
+                        selected_documents = st.session_state.selected_all_docs
+                        st.info(f"All {len(selected_documents)} documents selected for analysis")
+                
+                elif selection_method == "🔍 Filter and Select":
+                    # Filter-based selection
+                    col1_filter, col2_filter = st.columns(2)
+                    
+                    with col1_filter:
+                        # Filter by file type
+                        available_types = list(set(doc["file_type"] for doc in documents))
+                        selected_types = st.multiselect(
+                            "Filter by file type:",
+                            available_types,
+                            default=available_types,
+                            key="filter_file_types"
+                        )
+                    
+                    with col2_filter:
+                        # Filter by content size
+                        min_chunks = st.number_input(
+                            "Minimum chunks:",
+                            min_value=0,
+                            max_value=max(doc["total_chunks"] for doc in documents) if documents else 100,
+                            value=0,
+                            key="filter_min_chunks"
+                        )
+                    
+                    # Apply filters and show results
+                    filtered_docs = []
+                    for doc in documents:
+                        if (doc["file_type"] in selected_types and 
+                            doc["total_chunks"] >= min_chunks):
+                            filtered_docs.append(doc)
+                    
+                    if filtered_docs:
+                        st.write(f"**Filtered Results**: {len(filtered_docs)} documents match your criteria")
+                        
+                        # Create choices from filtered documents
+                        filtered_choices = {f"{doc['document_name']} ({doc['document_id'][:8]}...)": doc['document_id'] for doc in filtered_docs}
+                        
+                        selected_documents = st.multiselect(
+                            "Select from filtered documents:",
+                            list(filtered_choices.keys()),
+                            default=list(filtered_choices.keys()),  # Pre-select all filtered
+                            key="filtered_documents_select"
+                        )
+                    else:
+                        st.warning("No documents match the current filters")
+                
+                # Step 4: Generation Configuration
+                if selected_documents:
+                    st.markdown("---")
+                    st.markdown("#### Step 4: Generation Configuration")
+                    
+                    col1_config, col2_config = st.columns(2)
+                    
+                    with col1_config:
+                        output_collection = st.text_input(
+                            "Output Collection Name:",
+                            placeholder="e.g., generated-analysis-2024",
+                            help="Where to store the generated documents",
+                            key="output_collection_name"
+                        )
+                        
+                        generation_type = st.selectbox(
+                            "Generation Strategy:",
+                            [
+                                "Sequential Analysis (Agent by Agent)",
+                                "Parallel Analysis (All Agents Together)", 
+                                "Document-by-Document (One at a time)"
+                            ],
+                            help="Choose how to process documents and agents",
+                            key="generation_strategy"
+                        )
+                    
+                    with col2_config:
+                        content_limit = st.selectbox(
+                            "Content Processing Limit:",
+                            ["First 8,000 characters", "First 12,000 characters", "First 16,000 characters", "Full Document"],
+                            index=0,
+                            help="Limit content size to avoid timeouts",
+                            key="content_limit_select"
+                        )
+                        
+                        include_metadata = st.checkbox(
+                            "Include Document Metadata",
+                            value=True,
+                            help="Add document information to generated analysis",
+                            key="include_metadata_option"
+                        )
+                    
+                    # Advanced options
+                    with st.expander("Advanced Generation Options", expanded=False):
+                        col1_adv, col2_adv = st.columns(2)
+                        
+                        with col1_adv:
+                            max_parallel_requests = st.slider(
+                                "Max Parallel Requests:",
+                                min_value=1,
+                                max_value=5,
+                                value=2,
+                                help="Number of simultaneous agent requests",
+                                key="max_parallel_requests"
+                            )
+                            
+                            retry_failed = st.checkbox(
+                                "Retry Failed Generations",
+                                value=True,
+                                help="Automatically retry if agent analysis fails",
+                                key="retry_failed_option"
+                            )
+                        
+                        with col2_adv:
+                            request_timeout = st.slider(
+                                "Request Timeout (seconds):",
+                                min_value=60,
+                                max_value=300,
+                                value=180,
+                                help="How long to wait for each agent response",
+                                key="request_timeout_slider"
+                            )
+                            
+                            save_intermediate = st.checkbox(
+                                "Save Intermediate Results",
+                                value=True,
+                                help="Save results as they complete",
+                                key="save_intermediate_option"
+                            )
+                    
+                    # Generation Summary
+                    st.subheader("Generation Summary")
+                    
+                    # Parse content limit
+                    if content_limit == "First 8,000 characters":
+                        content_chars = 8000
+                    elif content_limit == "First 12,000 characters":
+                        content_chars = 12000
+                    elif content_limit == "First 16,000 characters":
+                        content_chars = 16000
+                    else:
+                        content_chars = None
+                    
+                    # Estimate processing time
+                    estimated_time = len(selected_documents) * len(selected_rule_agents) * 45  # 45 seconds per agent per document
+                    
+                    col1_summary, col2_summary, col3_summary = st.columns(3)
+                    
+                    with col1_summary:
+                        st.metric("Documents to Process", len(selected_documents))
+                    with col2_summary:
+                        st.metric("Agents to Use", len(selected_rule_agents))
+                    with col3_summary:
+                        st.metric("Est. Time (minutes)", f"{estimated_time // 60}")
+                    
+                    # Step 5: Start Generation
+                    st.markdown("---")
+                    st.markdown("#### Step 5: Start Generation")
+                    
+                    # Final validation
+                    generation_ready = (
+                        selected_rule_agents and 
+                        selected_documents and 
+                        output_collection and 
+                        len(output_collection.strip()) >= 3
+                    )
+                    
+                    if not generation_ready:
+                        missing_items = []
+                        if not selected_rule_agents:
+                            missing_items.append("Select agents")
+                        if not selected_documents:
+                            missing_items.append("Select documents")
+                        if not output_collection or len(output_collection.strip()) < 3:
+                            missing_items.append("Provide output collection name")
+                        
+                        st.warning(f"Complete these steps to start generation: {', '.join(missing_items)}")
+                    
+                    col1_generate, col2_generate, col3_generate = st.columns([1, 2, 1])
+                    
+                    with col2_generate:
+                        if st.button(
+                            f"Generate Documents ({len(selected_documents)} docs × {len(selected_rule_agents)} agents)",
+                            type="primary",
+                            disabled=not generation_ready,
+                            use_container_width=True,
+                            key="start_generation_btn"
+                        ):
+                            # Convert document choices back to IDs
+                            doc_choices = {f"{doc['document_name']} ({doc['document_id'][:8]}...)": doc['document_id'] for doc in documents}
+                            
+                            try:
+                                # Create output collection if needed
+                                with st.spinner("Setting up generation environment..."):
+                                    create_response = create_collection(output_collection.strip())
+                                    if create_response.status_code == 200:
+                                        st.success(f"Created output collection '{output_collection}'")
+                                    elif create_response.status_code == 409:
+                                        st.info(f"Using existing collection '{output_collection}'")
+                                    else:
+                                        st.warning(f"Collection setup issue: {create_response.status_code}")
+                                
+                                # Convert selections to IDs
+                                agent_ids = [agent_choices[name] for name in selected_rule_agents]
+                                document_ids = [doc_choices[name] for name in selected_documents]
+                                
+                                st.info(f"Starting generation: {len(document_ids)} documents × {len(agent_ids)} agents = {len(document_ids) * len(agent_ids)} total analyses")
+                                
+                                # Progress tracking
+                                progress_bar = st.progress(0)
+                                status_text = st.empty()
+                                results_container = st.container()
+                                
+                                generated_results = []
+                                total_operations = len(document_ids) * len(agent_ids)
+                                current_operation = 0
+                                failed_operations = []
+                                
+                                # Process each document with each agent
+                                for doc_selection in selected_documents:
+                                    doc_id = doc_choices[doc_selection]
+                                    doc_name = doc_selection.split(" (")[0]
+                                    
+                                    status_text.text(f"Processing document: {doc_name}")
+                                    
+                                    # Get document content
+                                    try:
+                                        doc_result = reconstruct_document_with_timeout(doc_id, collection_name, timeout=120)
+                                        doc_content = doc_result['reconstructed_content']
+                                        
+                                        # Apply content limit
+                                        if content_chars:
+                                            doc_content = doc_content[:content_chars]
+                                        
+                                        # Process with each selected agent
+                                        for agent_selection in selected_rule_agents:
+                                            agent_id = agent_choices[agent_selection]
+                                            agent_name = agent_selection.split(" (")[0]
+                                            
+                                            status_text.text(f"🤖 {agent_name} analyzing '{doc_name}'...")
+                                            
+                                            # Call agent for analysis
+                                            payload = {
+                                                "data_sample": doc_content,
+                                                "agent_ids": [agent_id]
+                                            }
+                                            
+                                            try:
+                                                response = requests.post(
+                                                    f"{FASTAPI_URL}/compliance-check",
+                                                    json=payload,
+                                                    timeout=request_timeout
+                                                )
+                                                
+                                                if response.status_code == 200:
+                                                    result = response.json()
+                                                    details = result.get("details", {})
+                                                    
+                                                    for idx, analysis in details.items():
+                                                        generated_content = analysis.get("reason", "No analysis generated")
+                                                        
+                                                        # Add metadata if requested
+                                                        if include_metadata:
+                                                            metadata_header = f"""# {agent_name} Analysis - {doc_name}
+
+**Source Document:** {doc_name}
+**Document ID:** {doc_id}
+**Collection:** {collection_name}
+**Agent:** {agent_name}
+**Generated:** {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+**Content Processed:** {len(doc_content):,} characters
+
+---
+
+    """
+                                                            generated_content = metadata_header + generated_content
+                                                        
+                                                        generated_results.append({
+                                                            "source_document": doc_name,
+                                                            "source_document_id": doc_id,
+                                                            "agent_name": agent_name,
+                                                            "agent_id": agent_id,
+                                                            "analysis_content": generated_content,
+                                                            "document_title": f"{agent_name} Analysis - {doc_name}",
+                                                            "generation_timestamp": datetime.datetime.now().isoformat(),
+                                                            "content_length": len(generated_content),
+                                                            "processing_time_ms": result.get("response_time_ms", 0)
+                                                        })
+                                                        
+                                                        # Show immediate success
+                                                        with results_container:
+                                                            st.success(f"{agent_name} completed analysis of '{doc_name}'")
+                                                else:
+                                                    error_msg = f"Analysis failed for {agent_name} on {doc_name}: HTTP {response.status_code}"
+                                                    failed_operations.append(error_msg)
+                                                    with results_container:
+                                                        st.warning(f"{error_msg}")
+                                            
+                                            except requests.exceptions.Timeout:
+                                                error_msg = f"Timeout: {agent_name} on {doc_name}"
+                                                failed_operations.append(error_msg)
+                                                with results_container:
+                                                    st.warning(f"{error_msg}")
+                                            
+                                            except Exception as e:
+                                                error_msg = f"Error: {agent_name} on {doc_name}: {str(e)}"
+                                                failed_operations.append(error_msg)
+                                                with results_container:
+                                                    st.error(f"{error_msg}")
+                                            
+                                            current_operation += 1
+                                            progress_bar.progress(current_operation / total_operations)
+                                            
+                                            # Save intermediate results if requested
+                                            if save_intermediate and generated_results:
+                                                st.session_state.generated_results = generated_results
+                                                st.session_state.output_collection = output_collection
+                                    
+                                    except Exception as e:
+                                        error_msg = f"Error loading document '{doc_name}': {str(e)}"
+                                        failed_operations.append(error_msg)
+                                        with results_container:
+                                            st.error(f"{error_msg}")
+                                        continue
+                                
+                                # Generation complete
+                                progress_bar.progress(1.0)
+                                status_text.text("Generation complete!")
+                                
+                                # Final results
+                                if generated_results:
+                                    st.balloons()
+                                    st.success(f"Successfully generated {len(generated_results)} analysis documents!")
+                                    
+                                    if failed_operations:
+                                        st.warning(f"len(failed_operations) operations failed:")
+                                        for failure in failed_operations[:5]:  # Show first 5 failures
+                                            st.caption(f"• {failure}")
+                                        if len(failed_operations) > 5:
+                                            st.caption(f"... and {len(failed_operations) - 5} more")
+                                    
+                                    # Store results in session state for export
+                                    st.session_state.generated_results = generated_results
+                                    st.session_state.output_collection = output_collection
+                                    
+                                    # Quick export option
+                                    st.markdown("### Quick Export")
+                                    
+                                    if st.button("Export All as DOCX", key="quick_export_docx"):
+                                        try:
+                                            from docx import Document
+                                            doc = Document()
+                                            doc.add_heading('Generated Rule Analysis Documents', 0)
+                                            doc.add_page_break()
+                                            
+                                            for result in generated_results:
+                                                doc.add_heading(result['document_title'], 1)
+                                                doc.add_paragraph(result['analysis_content'])
+                                                doc.add_page_break()
+                                            
+                                            # Save to temporary file
+                                            import tempfile
+                                            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
+                                            doc.save(temp_file.name)
+                                            
+                                            # Provide download
+                                            with open(temp_file.name, "rb") as file:
+                                                st.download_button(
+                                                    label="💾 Download Combined Analysis",
+                                                    data=file.read(),
+                                                    file_name=f"Generated_Analysis_{output_collection}_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.docx",
+                                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                                    key="download_combined_analysis"
+                                                )
+                                            
+                                            os.unlink(temp_file.name)
+                                            
+                                        except Exception as e:
+                                            st.error(f"Export error: {e}")
+                                    
+                                    # Navigate to Generated Documents
+                                    st.info("**Next Steps**: Go to '📊 Generated Documents' to view, manage, and export your results!")
+                                
+                                else:
+                                    st.error("No documents were successfully generated.")
+                                    if failed_operations:
+                                        st.error("All operations failed. Check agent and document configurations.")
+                            
+                            except Exception as e:
+                                st.error(f"Generation error: {str(e)}")
+            
+            else:
+                st.info("Please load documents from a collection to proceed with generation.")
+        
+        else:
+            st.info("Please load rule development agents to start the document generation process.")
+            st.markdown("""
+            **To get started:**
+            1. Go to 'Rule Development Agents' and create some agents
+            2. Upload templates in 'Template Management' 
+            3. Return here to generate documents
+            """)
+        
+        # Help section
+        with st.expander("Document Generation Help & Tips", expanded=False):
+            col1_help, col2_help = st.columns(2)
+            
+            with col1_help:
+                st.markdown("""
+                **📋 Generation Workflow:**
+                
+                1. **Load Agents**: Import your rule development agents
+                2. **Select Collection**: Choose template source collection
+                3. **Load Documents**: Import documents from collection
+                4. **Select Documents**: Choose specific documents or all
+                5. **Configure**: Set output collection and options
+                6. **Generate**: Start the analysis process
+                
+                **Document Selection:**
+                
+                - **Specific**: Choose individual documents for targeted analysis
+                - **All**: Process entire collection for comprehensive coverage
+                - **Filtered**: Use file type and size filters for selective processing
+                """)
+            
+            with col2_help:
+                st.markdown("""
+                **Performance Tips:**
+                
+                - **Content Limit**: Use 8,000 chars for faster processing
+                - **Batch Size**: Process 5-10 documents at a time
+                - **Parallel Requests**: Keep at 2-3 for stability
+                - **Timeout**: 180 seconds works for most analyses
+                
+                **Troubleshooting:**
+                
+                - **Timeouts**: Reduce content limit or increase timeout
+                - **Failures**: Check agent configuration and model availability  
+                - **No Results**: Verify agents are active and models loaded
+                - **Slow Processing**: Large documents take more time
+                
+                **Best Practices:**
+                
+                - Preview documents before bulk processing
+                - Start with small test sets
+                - Use descriptive output collection names
+                - Save intermediate results for long generations
+                """)
+        
+
+
 
 # Footer
 st.markdown("---")
