@@ -7,7 +7,7 @@ echo "Stopping AI Validation System..."
 docker compose down
 
 echo "Cleaning up..."
-docker system prune -f --volumes 2>/dev/null || true
+docker system prune -a 2>/dev/null || true
 
 echo "AI system stopped and cleaned up."
 echo "Data preserved in ./data/ directory"

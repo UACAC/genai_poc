@@ -55,7 +55,7 @@ os.makedirs(IMAGES_DIR, exist_ok=True)
 app = FastAPI(title="ChromaDB Dockerized")
 
         # Fix the environment variable name
-open_ai_api_key = os.getenv("OPEN_AI_API_KEY")  # Changed from OPEN_AI_API_KEY
+open_ai_api_key = os.getenv("OPEN_AI_API_KEY")  
 
 VISION_CONFIG = {
     "openai_enabled": bool(open_ai_api_key),
@@ -92,7 +92,7 @@ def describe_with_openai_markitdown(image_path: str, api_key: str = None) -> Opt
     """Use OpenAI via MarkItDown for image description"""
     try:
         if not (api_key or open_ai_api_key):
-            logger.info("No OpenAI API key available for image description")
+            logger.info("No Open AI API key available for image description")
             return None
             
         # Verify image file exists and is readable
@@ -398,12 +398,12 @@ def describe_images_for_pages(pages_data, api_key_override=None, run_all_models=
                             openai_desc = describe_with_openai_markitdown(img_path, api_key_override)
                             if openai_desc:
                                 all_descriptions["OpenAI"] = openai_desc
-                                methods_attempted.append("OpenAI ✅")
+                                methods_attempted.append("OpenAI")
                             else:
-                                methods_attempted.append("OpenAI ❌")
+                                methods_attempted.append("OpenAI")
                         except Exception as e:
                             logger.warning(f"OpenAI failed: {e}")
-                            methods_attempted.append("OpenAI ❌")
+                            methods_attempted.append("OpenAI")
                     
                     # Method 2: Ollama vision model
                     if VISION_CONFIG["ollama_enabled"]:
@@ -411,12 +411,12 @@ def describe_images_for_pages(pages_data, api_key_override=None, run_all_models=
                             ollama_desc = describe_with_ollama_vision(img_path)
                             if ollama_desc:
                                 all_descriptions["Ollama"] = ollama_desc
-                                methods_attempted.append("Ollama ✅")
+                                methods_attempted.append("Ollama")
                             else:
-                                methods_attempted.append("Ollama ❌")
+                                methods_attempted.append("Ollama")
                         except Exception as e:
                             logger.warning(f"Ollama failed: {e}")
-                            methods_attempted.append("Ollama ❌")
+                            methods_attempted.append("Ollama")
                     
                     # Method 3: HuggingFace BLIP model
                     if VISION_CONFIG["huggingface_enabled"]:
@@ -424,12 +424,12 @@ def describe_images_for_pages(pages_data, api_key_override=None, run_all_models=
                             hf_desc = describe_with_huggingface_vision(img_path)
                             if hf_desc:
                                 all_descriptions["HuggingFace"] = hf_desc
-                                methods_attempted.append("HuggingFace ✅")
+                                methods_attempted.append("HuggingFace")
                             else:
-                                methods_attempted.append("HuggingFace ❌")
+                                methods_attempted.append("HuggingFace")
                         except Exception as e:
                             logger.warning(f"HuggingFace failed: {e}")
-                            methods_attempted.append("HuggingFace ❌")
+                            methods_attempted.append("HuggingFace")
                     
                     # Method 4: Enhanced local analysis with OpenCV
                     if VISION_CONFIG["enhanced_local_enabled"]:
@@ -437,21 +437,21 @@ def describe_images_for_pages(pages_data, api_key_override=None, run_all_models=
                             enhanced_desc = enhanced_local_image_analysis(img_path)
                             if enhanced_desc:
                                 all_descriptions["Enhanced Local"] = enhanced_desc
-                                methods_attempted.append("Enhanced Local ✅")
+                                methods_attempted.append("Enhanced Local")
                             else:
-                                methods_attempted.append("Enhanced Local ❌")
+                                methods_attempted.append("Enhanced Local")
                         except Exception as e:
                             logger.warning(f"Enhanced Local failed: {e}")
-                            methods_attempted.append("Enhanced Local ❌")
+                            methods_attempted.append("Enhanced Local")
                     
                     # Method 5: Basic fallback (always include)
                     try:
                         basic_desc = basic_image_analysis(img_path)
                         all_descriptions["Basic Fallback"] = basic_desc
-                        methods_attempted.append("Basic Fallback ✅")
+                        methods_attempted.append("Basic Fallback")
                     except Exception as e:
                         logger.warning(f"Basic analysis failed: {e}")
-                        methods_attempted.append("Basic Fallback ❌")
+                        methods_attempted.append("Basic Fallback")
                     
                     # Combine all descriptions into a comprehensive analysis
                     if all_descriptions:
@@ -852,12 +852,12 @@ def create_combined_description(all_descriptions: dict, filename: str) -> str:
     for model in model_priority:
         if model in all_descriptions:
             description = all_descriptions[model]
-            combined += f"🔍 **{model} Analysis:**\n{description}\n\n"
+            combined += f"**{model} Analysis:**\n{description}\n\n"
     
     # Add any models not in priority list
     for model, description in all_descriptions.items():
         if model not in model_priority:
-            combined += f"🔍 **{model} Analysis:**\n{description}\n\n"
+            combined += f"**{model} Analysis:**\n{description}\n\n"
     
     # Summary section
     combined += "**Analysis Summary:**\n"

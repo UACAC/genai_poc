@@ -231,6 +231,7 @@ fi
 
 # Start services
 echo "Starting Docker services..."
+$DOCKER_COMPOSE_CMD build base-poetry-deps
 $DOCKER_COMPOSE_CMD up --build -d
 
 echo ""
@@ -279,7 +280,7 @@ echo "Stopping AI Validation System..."
 $DOCKER_COMPOSE_CMD down
 
 echo "Cleaning up..."
-docker system prune -f --volumes 2>/dev/null || true
+docker system prune -a 2>/dev/null || true
 
 echo "AI system stopped and cleaned up."
 echo "Data preserved in ./data/ directory"
