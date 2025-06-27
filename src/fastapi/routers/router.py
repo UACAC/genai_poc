@@ -1,4 +1,5 @@
 import uuid
+import os
 from typing import List, Dict, Optional, Tuple
 from sqlalchemy.orm import Session
 import time
@@ -9,6 +10,7 @@ from services.database import ComplianceAgent, DebateSession, ChatHistory, Sessi
 from services.llm_service import LLMService
 from services.agent_service import AgentService
 from services.rag_service import RAGService 
+from services.generate_docs_service import DocumentService
 from schemas.database_schema import (
     ComplianceCheckRequest,
     RAGCheckRequest,
@@ -736,3 +738,32 @@ async def get_session_analytics(days: int = 7, db: Session = Depends(get_db)):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) 
+    
+
+doc_service = DocumentService(
+    rag_service=rag_service,
+    agent_service=agent_service,
+    chroma_url=os.getenv("CHROMA_URL", "http://localhost:8020"),
+    agent_api_url=os.getenv("FASTAPI_URL", "http://localhost:9020")
+)
+
+class GenerateRequest(BaseModel):
+    template_collection: str
+    source_collections: Optional[List[str]] = None
+    agent_ids: List[int]
+    use_rag: bool = True
+    top_k: int = 5
+
+@router.post("/generate_documents")
+async def generate_documents(req: GenerateRequest):
+    try:
+        docs = doc_service.generate_documents(
+            template_collection=req.template_collection,
+            source_collections=req.source_collections or [],
+            agent_ids=req.agent_ids,
+            use_rag=req.use_rag,
+            top_k=req.top_k
+        )
+        return {"documents": docs}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

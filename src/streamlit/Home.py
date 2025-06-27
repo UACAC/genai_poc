@@ -6,6 +6,7 @@ import datetime
 import time
 from utils import * 
 import torch
+import base64
 
 torch.classes.__path__ = []
 nest_asyncio.apply()
@@ -3180,22 +3181,45 @@ elif chat_mode == "Document Generator":
             st.info("Choose at least one agent to proceed"); st.stop()
 
         # ——————————————————————————
-        # 2) Pick collection & load docs
+        # 2a) Pick TEMPLATE collection & load template docs
         # ——————————————————————————
-        collection = st.selectbox("Template Collection", st.session_state.collections, key="gen_collection")
-        if st.button("Load Documents", key="gen_load_docs"):
-            st.session_state.docs = get_all_documents_in_collection(collection)
-        docs = st.session_state.get("docs", [])
-        if not docs:
-            st.info("Load a collection to see its documents"); st.stop()
+        template_collection = st.selectbox(
+            "Template Collection (the one you uploaded as templates)",
+            st.session_state.collections,
+            key="gen_template_coll",
+        )
+        if st.button("Load Template Library", key="gen_load_templates"):
+            st.session_state.template_docs = get_all_documents_in_collection(template_collection)
+
+        template_docs = st.session_state.get("template_docs", [])
+        template_map = {d["document_name"]: d["document_id"] for d in template_docs}
+        selected_templates = st.multiselect(
+            "Select Template(s)", list(template_map.keys()), key="gen_templates"
+        )
+        template_doc_ids = [template_map[name] for name in selected_templates]
 
         # ——————————————————————————
-        # 3) Pick docs
+        # 2b) Pick SOURCE collection & load source docs
         # ——————————————————————————
-        doc_map = {d["document_name"]: d["document_id"] for d in docs}
-        selected_docs = st.multiselect("Select Documents", list(doc_map.keys()), key="gen_docs")
-        if not selected_docs:
-            st.info("Choose at least one document to proceed"); st.stop()
+        source_collection = st.selectbox(
+            "Source Collection (your requirements/standards)",
+            st.session_state.collections,
+            key="gen_source_coll",
+        )
+        if st.button("Load Source Documents", key="gen_load_sources"):
+            st.session_state.source_docs = get_all_documents_in_collection(source_collection)
+
+        source_docs = st.session_state.get("source_docs", [])
+        source_map = {d["document_name"]: d["document_id"] for d in source_docs}
+        selected_sources = st.multiselect(
+            "Select Source Document(s)", list(source_map.keys()), key="gen_sources"
+        )
+        source_doc_ids = [source_map[name] for name in selected_sources]
+
+        # ——————————————————————————
+        # 3) Pick agents (unchanged)
+        # ——————————————————————————
+        agent_ids = [agent_map[label] for label in selected_agents]
 
         # ——————————————————————————
         # 4) Let user name the output file
@@ -3209,34 +3233,35 @@ elif chat_mode == "Document Generator":
         # ——————————————————————————
         # 5) Generate analyses
         # ——————————————————————————
-        if st.button(f"Generate {len(selected_agents)} x {len(selected_docs)}", key="gen_run"):
-            results = []
-            total = len(selected_agents) * len(selected_docs)
-            with st.spinner("Generating analyses..."):  
-                cnt = 0
-                for agent_label in selected_agents:
-                    agent_id = agent_map[agent_label]
-                    for doc_name in selected_docs:
-                        cnt += 1
-                        # fetch & truncate
-                        doc_id = doc_map[doc_name]
-                        content = reconstruct_document_with_timeout(doc_id, collection)["reconstructed_content"]
-                        # call endpoint
-                        resp = requests.post(
-                            f"{FASTAPI_URL}/compliance-check",
-                            json={"data_sample": content, "agent_ids":[agent_id]},
-                            timeout=180
-                        )
-                        if resp.ok:
-                            detail = resp.json()["details"]
-                            analysis = next(iter(detail.values()))["reason"]
-                            results.append({
-                                "title": f"{agent_label} - {doc_name}",
-                                "content": analysis
-                            })
-            st.success(f"Done! {len(results)} analyses complete.")
-            st.session_state.gen_results = results
+        if st.button("Generate Documents", type="primary"):
+            if not template_doc_ids or not source_doc_ids or not agent_ids:
+                st.error("You must select at least one template, one source doc, and one agent.")
+            else:
+                payload = {
+                    "template_doc_ids": template_doc_ids,
+                    "source_doc_ids": source_doc_ids,
+                    "agent_ids": agent_ids,
+                    "use_rag": False,
+                    "top_k": 5,
+                }
+                with st.spinner("Calling Document Generator…"):
+                    resp = requests.post(f"{FASTAPI_URL}/generate_documents", json=payload)
 
+            if not resp.ok:
+                st.error(f"Error {resp.status_code}: {resp.text}")
+            else:
+                docs = resp.json()["documents"]
+                st.success(f"Generated {len(docs)} documents")
+                for d in docs:
+                    # decode the base64 DOCX and show download button
+                    blob = base64.b64decode(d["docx_b64"])
+                    st.download_button(
+                        label=f"{d['title']}.docx",
+                        data=blob,
+                        file_name=f"{d['title']}.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    )
+                    
         # ——————————————————————————
         # 6) Offer download once we have results
         # ——————————————————————————

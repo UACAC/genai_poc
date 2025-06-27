@@ -14,6 +14,7 @@ from io import BytesIO
 from PIL import Image
 import datetime
 from io import BytesIO
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 # ChromaDB API endpoint
@@ -90,7 +91,7 @@ def store_files_in_chromadb(files, collection_name, model_name="none", openai_ap
     
     # Prepare headers
     headers = {}
-    if openai_api_key and model_name in ["gpt-4", "gpt-3.5-turbo"]:
+    if openai_api_key and model_name in ["gpt-4o-mini"]:
         headers["X-OpenAI-API-Key"] = openai_api_key
     
     try:
@@ -139,7 +140,7 @@ def store_files_in_chromadb_selective(files, collection_name, model_name="none",
     
     # Prepare headers
     headers = {}
-    if openai_api_key and model_name in ["gpt-4", "gpt-3.5-turbo"]:
+    if openai_api_key and model_name in ["gpt-4o-mini"]:
         headers["X-OpenAI-API-Key"] = openai_api_key
     
     try:
@@ -167,6 +168,64 @@ def store_files_in_chromadb_selective(files, collection_name, model_name="none",
         raise Exception(f"Could not connect to ChromaDB at {CHROMADB_API}")
     except Exception as e:
         raise Exception(f"Error storing files: {str(e)}")
+
+
+def store_files_in_chromadb_parallel(
+    files,
+    collection_name,
+    model_name="none",
+    openai_api_key=None,
+    chunk_size=1000,
+    chunk_overlap=200,
+    store_images=True,
+    debug_mode=False,
+    selected_models=None,
+    max_workers=4
+):
+    """
+    Fire off one HTTP upload per file in parallel threads, then gather all the responses.
+    """
+    # worker that wraps your existing single‐file call
+    def _upload_one(f):
+        return store_files_in_chromadb_selective(
+            [f],
+            collection_name,
+            model_name=model_name,
+            openai_api_key=openai_api_key,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            store_images=store_images,
+            debug_mode=debug_mode,
+            selected_models=selected_models,
+        )
+
+    results = []
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_upload_one, f): f.name for f in files}
+        for fut in as_completed(futures):
+            fname = futures[fut]
+            try:
+                results.append(fut.result())
+            except Exception as e:
+                results.append({
+                    "filename": fname,
+                    "status": "error",
+                    "error": str(e)
+                })
+                
+    merged = []
+    for resp in results:
+        if isinstance(resp, dict) and "processed_files" in resp:
+            merged.extend(resp["processed_files"])
+        else:
+            merged.append(resp)
+    
+    return {
+        "collection": collection_name,
+        "processed_files": merged,
+        "total_files_processed": sum(1 for d in merged if d.get("status")=="success")
+    }
+
 
 def query_documents_with_embedding(collection_name, query_text, n_results=5):
     """Query documents using text embedding"""

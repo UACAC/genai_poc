@@ -1,6 +1,6 @@
 import streamlit as st
 import requests
-from utils import fetch_collections, store_files_in_chromadb, list_all_chunks_with_scores, export_to_docx, export_to_pdf, image_to_base64, render_reconstructed_document, store_files_in_chromadb_selective
+from utils import *
 import torch
 import os
 import base64
@@ -44,7 +44,7 @@ def get_all_documents_in_collection(collection_name):
         response = requests.get(
             f"{CHROMADB_API}/documents",
             params={"collection_name": collection_name},
-            timeout=60  # Increased timeout
+            # timeout=300 # Increased timeout
         )
         if response.status_code == 200:
             data = response.json()
@@ -89,7 +89,7 @@ def query_documents(collection_name, query_text, n_results=5):
                 "n_results": n_results,
                 "include": ["documents", "metadatas", "distances"]
             },
-            timeout=60
+            timeout=300
         )
         
         if response.status_code == 200:
@@ -146,7 +146,7 @@ with col2:
             response = requests.post(
                 f"{CHROMADB_API}/collection/create", 
                 params={"collection_name": new_collection},
-                timeout=60  # Increased timeout
+                timeout=60
             )
             if response.status_code == 200:
                 st.success(f"Collection '{new_collection}' created!")
@@ -263,14 +263,12 @@ if collections:
                 progress_text = f"Running: {', '.join(selected_models).title()}"
                 st.write(progress_text)
                 
-                results = store_files_in_chromadb_selective(
-                    uploaded_files, 
+                results = store_files_in_chromadb_parallel(
+                    uploaded_files,
                     collection_name,
-                    chunk_size=chunk_size,
-                    chunk_overlap=chunk_overlap,
-                    store_images=store_images,
-                    debug_mode=debug_mode,
-                    selected_models=selected_models
+                    openai_api_key=os.getenv("OPEN_AI_API_KEY"),
+                    selected_models=selected_models,
+                    max_workers=min(4, len(uploaded_files))
                 )
 
                 st.success(f"Documents stored in collection '{collection_name}'!")
@@ -297,7 +295,7 @@ if collections:
                     st.write(f"**Total Chunks Created**: {results.get('total_chunks_created', 0)}")
                     st.write(f"**Total Images Stored**: {results.get('total_images_stored', 0)}")
                     st.write(f"**Vision Models Used**: {', '.join(results.get('vision_models_used', [])).title()}")
-                    st.write(f"**OpenAI API Used**: {results.get('openai_api_used', False)}")
+                    st.write(f"**OpenAI API Used**: {results.get('open_ai_api_used', False)}")
                         
         except Exception as e:
             st.error(f"Error storing documents: {str(e)}")
@@ -411,7 +409,7 @@ if collections:
                 response = requests.get(
                     f"{CHROMADB_API}/documents/reconstruct/{document_id}",
                     params={"collection_name": reconstruct_collection},
-                    timeout=300  # Increased timeout to 5 minutes
+                    # timeout=300 
                 )
 
             if response.status_code == 200:

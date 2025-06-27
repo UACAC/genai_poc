@@ -13,7 +13,7 @@ fi
 
 # Start services
 echo "Starting Docker services..."
-docker build base-poetry-deps
+docker compose build base-poetry-deps
 docker compose up --build -d
 
 echo ""

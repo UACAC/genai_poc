@@ -24,6 +24,12 @@ from collections import Counter
 from dotenv import load_dotenv
 from transformers import BlipProcessor, BlipForConditionalGeneration
 import cv2
+from fastapi.concurrency import run_in_threadpool
+import asyncio, tempfile, uuid, json, os
+from fastapi import UploadFile, File, Query, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
+import asyncio, tempfile, uuid, json, os, functools
+from pathlib import Path
 
 
 load_dotenv()
@@ -88,7 +94,7 @@ def get_markitdown_instance(api_key_override: str = None):
         return MarkItDown()
 
 
-def describe_with_openai_markitdown(image_path: str, api_key: str = None) -> Optional[str]:
+async def describe_with_openai_markitdown(image_path: str, api_key: str = open_ai_api_key) -> Optional[str]:
     """Use OpenAI via MarkItDown for image description"""
     try:
         if not (api_key or open_ai_api_key):
@@ -109,7 +115,14 @@ def describe_with_openai_markitdown(image_path: str, api_key: str = None) -> Opt
             return None
             
         md_instance = get_markitdown_instance(api_key)
-        result = md_instance.convert(image_path)
+        fn = functools.partial(md_instance.convert, image_path)
+        
+        try:
+            # 60s should be plenty for a single image—tune to your needs
+            result =  await asyncio.wait_for(asyncio.to_thread(fn), timeout=60)
+        except asyncio.TimeoutError:
+            logger.warning(f"OpenAI vision timed out for {image_path}")
+            return None
         
         # Extract text content properly
         desc = None
@@ -163,7 +176,7 @@ def describe_with_ollama_vision(image_path: str) -> Optional[str]:
                 "images": [img_data],
                 "stream": False
             },
-            timeout=30
+            timeout= (10, 60)
         )
         
         if response.status_code == 200:
@@ -371,145 +384,56 @@ def basic_image_analysis(image_path: str) -> str:
         logger.error(f"Basic image analysis failed for {image_path}: {e}")
         return f"Image file: {Path(image_path).name} (analysis failed)"
 
-def describe_images_for_pages(pages_data, api_key_override=None, run_all_models=True):
-    """Comprehensive image description using multiple vision models"""
-    
-    logger.info(f"Vision system status: OpenAI={VISION_CONFIG['openai_enabled']}, "
-                f"Ollama={VISION_CONFIG['ollama_enabled']}, "
-                f"HuggingFace={VISION_CONFIG['huggingface_enabled']}, "
-                f"Enhanced Local={VISION_CONFIG['enhanced_local_enabled']}")
-    logger.info(f"Run all models mode: {run_all_models}")
-    
-    for page_info in pages_data:
-        descriptions = []
-        for img_path in page_info['images']:
-            
+def describe_images_for_pages(
+    pages_data: List[Dict],
+    api_key_override=None,
+    run_all_models: bool = True,
+    enabled_models: set[str] = frozenset(),
+    vision_flags: dict[str,bool] = {}
+) -> List[Dict]:
+    for page in pages_data:
+        descs = []
+        for img_path in page["images"]:
             if run_all_models:
-                # NEW: Run ALL available vision models and collect all descriptions
-                all_descriptions = {}
-                methods_attempted = []
-                
-                try:
-                    logger.info(f"Running ALL vision models for image: {img_path}")
-                    
-                    # Method 1: OpenAI via MarkItDown (highest quality)
-                    if api_key_override or open_ai_api_key:
-                        try:
-                            openai_desc = describe_with_openai_markitdown(img_path, api_key_override)
-                            if openai_desc:
-                                all_descriptions["OpenAI"] = openai_desc
-                                methods_attempted.append("OpenAI")
-                            else:
-                                methods_attempted.append("OpenAI")
-                        except Exception as e:
-                            logger.warning(f"OpenAI failed: {e}")
-                            methods_attempted.append("OpenAI")
-                    
-                    # Method 2: Ollama vision model
-                    if VISION_CONFIG["ollama_enabled"]:
-                        try:
-                            ollama_desc = describe_with_ollama_vision(img_path)
-                            if ollama_desc:
-                                all_descriptions["Ollama"] = ollama_desc
-                                methods_attempted.append("Ollama")
-                            else:
-                                methods_attempted.append("Ollama")
-                        except Exception as e:
-                            logger.warning(f"Ollama failed: {e}")
-                            methods_attempted.append("Ollama")
-                    
-                    # Method 3: HuggingFace BLIP model
-                    if VISION_CONFIG["huggingface_enabled"]:
-                        try:
-                            hf_desc = describe_with_huggingface_vision(img_path)
-                            if hf_desc:
-                                all_descriptions["HuggingFace"] = hf_desc
-                                methods_attempted.append("HuggingFace")
-                            else:
-                                methods_attempted.append("HuggingFace")
-                        except Exception as e:
-                            logger.warning(f"HuggingFace failed: {e}")
-                            methods_attempted.append("HuggingFace")
-                    
-                    # Method 4: Enhanced local analysis with OpenCV
-                    if VISION_CONFIG["enhanced_local_enabled"]:
-                        try:
-                            enhanced_desc = enhanced_local_image_analysis(img_path)
-                            if enhanced_desc:
-                                all_descriptions["Enhanced Local"] = enhanced_desc
-                                methods_attempted.append("Enhanced Local")
-                            else:
-                                methods_attempted.append("Enhanced Local")
-                        except Exception as e:
-                            logger.warning(f"Enhanced Local failed: {e}")
-                            methods_attempted.append("Enhanced Local")
-                    
-                    # Method 5: Basic fallback (always include)
+                all_desc = {}
+                if "openai" in enabled_models and vision_flags.get("openai", False):
                     try:
-                        basic_desc = basic_image_analysis(img_path)
-                        all_descriptions["Basic Fallback"] = basic_desc
-                        methods_attempted.append("Basic Fallback")
-                    except Exception as e:
-                        logger.warning(f"Basic analysis failed: {e}")
-                        methods_attempted.append("Basic Fallback")
-                    
-                    # Combine all descriptions into a comprehensive analysis
-                    if all_descriptions:
-                        combined_description = create_combined_description(all_descriptions, Path(img_path).name)
-                        descriptions.append(combined_description)
-                        
-                        logger.info(f"Multi-model analysis complete for {Path(img_path).name}")
-                        logger.info(f"Methods: {', '.join(methods_attempted)}")
-                        logger.info(f"Total descriptions: {len(all_descriptions)}")
-                    else:
-                        descriptions.append(f"All image analysis methods failed for: {Path(img_path).name}")
-                        logger.error(f"All methods failed for {img_path}")
-                
-                except Exception as e:
-                    logger.error(f"Critical error in multi-model analysis for {img_path}: {e}")
-                    descriptions.append(f"Critical analysis failure: {Path(img_path).name}")
-            
+                        d = asyncio.run(describe_with_openai_markitdown(img_path, api_key_override))
+                    except Exception:
+                        d = None
+                    if d:
+                        all_desc["OpenAI"] = d
+                if "ollama" in enabled_models and vision_flags.get("ollama", False):
+                    d = describe_with_ollama_vision(img_path)
+                    if d: all_desc["Ollama"] = d
+                if "huggingface" in enabled_models and vision_flags.get("huggingface", False):
+                    d = describe_with_huggingface_vision(img_path)
+                    if d: all_desc["HuggingFace"] = d
+                if "enhanced_local" in enabled_models and vision_flags.get("enhanced_local", False):
+                    d = enhanced_local_image_analysis(img_path)
+                    if d: all_desc["Enhanced Local"] = d
+
+                # always include basic fallback
+                all_desc["Basic Fallback"] = basic_image_analysis(img_path)
+                descs.append(create_combined_description(all_desc, Path(img_path).name))
+
             else:
-                # ORIGINAL: First-success-only mode (keep for compatibility)
-                description = None
-                method_used = "none"
-                
-                try:
-                    logger.info(f"Running first-success mode for image: {img_path}")
-                    
-                    # Try methods in order until one succeeds
-                    if not description and (api_key_override or open_ai_api_key):
-                        description = describe_with_openai_markitdown(img_path, api_key_override)
-                        if description:
-                            method_used = "OpenAI"
-                    
-                    if not description and VISION_CONFIG["ollama_enabled"]:
-                        description = describe_with_ollama_vision(img_path)
-                        if description:
-                            method_used = "Ollama"
-                    
-                    if not description and VISION_CONFIG["huggingface_enabled"]:
-                        description = describe_with_huggingface_vision(img_path)
-                        if description:
-                            method_used = "HuggingFace"
-                    
-                    if not description and VISION_CONFIG["enhanced_local_enabled"]:
-                        description = enhanced_local_image_analysis(img_path)
-                        method_used = "Enhanced Local"
-                    
-                    if not description:
-                        description = basic_image_analysis(img_path)
-                        method_used = "Basic Fallback"
-                    
-                    descriptions.append(description)
-                    logger.info(f"[{method_used}] Successfully described {Path(img_path).name}")
-                    
-                except Exception as e:
-                    logger.error(f"All image description methods failed for {img_path}: {e}")
-                    descriptions.append(f"Image analysis failed: {Path(img_path).name}")
-        
-        page_info['image_descriptions'] = descriptions
+                # first‐success only among enabled & flagged
+                d = None
+                if "openai" in enabled_models and vision_flags.get("openai", False):
+                    d = describe_with_openai_markitdown(img_path, api_key_override)
+                if not d and "ollama" in enabled_models and vision_flags.get("ollama", False):
+                    d = describe_with_ollama_vision(img_path)
+                if not d and "huggingface" in enabled_models and vision_flags.get("huggingface", False):
+                    d = describe_with_huggingface_vision(img_path)
+                if not d and "enhanced_local" in enabled_models and vision_flags.get("enhanced_local", False):
+                    d = enhanced_local_image_analysis(img_path)
+                descs.append(d or basic_image_analysis(img_path))
+
+        page["image_descriptions"] = descs
     return pages_data
+
+
 
 def extract_and_store_images_from_file(file_content: bytes, filename: str, temp_dir: str, doc_id: str) -> List[Dict]:
     """Fixed image extraction from PDF with better error handling"""
@@ -573,6 +497,18 @@ def extract_and_store_images_from_file(file_content: bytes, filename: str, temp_
                             try:
                                 # Get image data
                                 filters = xobj.get('/Filter')
+                                # if it’s neither DCT (jpg) nor Flate (png), try PIL from-memory:
+                                if filters not in ('/DCTDecode','/FlateDecode'):
+                                    img_ext = 'png'
+                                    try:
+                                        from io import BytesIO
+                                        im = Image.open(BytesIO(data))
+                                        im = im.convert("RGB")
+                                        im.save(img_storage_path, format="PNG")
+                                        logger.info(f"Forced-PNG from {filters}: {img_filename}")
+                                    except Exception:
+                                        # fallback to writing raw bytes and hope verify() passes
+                                        pass
                                 data = xobj.get_data()
                                 
                                 # Determine file extension
@@ -590,6 +526,19 @@ def extract_and_store_images_from_file(file_content: bytes, filename: str, temp_
                                 # Save image
                                 with open(img_storage_path, "wb") as img_file:
                                     img_file.write(data)
+                                    
+                                # — normalize any “png” (and catch /Filter lists like ['/FlateDecode', ...])
+                                if img_ext == 'png':
+                                    try:
+                                        with Image.open(img_storage_path) as im:
+                                            # convert any weird bit-depths/modes into RGB
+                                            if im.mode not in ("RGB", "L"):
+                                                im = im.convert("RGB")
+                                            # re-save so the file on disk is a bona-fide PNG
+                                            im.save(img_storage_path)
+                                        logger.info(f"Normalized PNG: {img_filename}")
+                                    except Exception as e:
+                                        logger.warning(f"Could not normalize {img_filename}: {e}")
                                 
                                 # Verify image was saved and is valid
                                 if os.path.exists(img_storage_path) and os.path.getsize(img_storage_path) > 0:
@@ -890,7 +839,14 @@ def extract_key_insights(all_descriptions: dict) -> str:
     return ", ".join(insights[:3])  # Limit to top 3 insights
 
 
-def process_document_with_context_multi_model(file_content: bytes, filename: str, temp_dir: str, doc_id: str, openai_api_key: str = None, run_all_models: bool = True) -> Dict:
+def process_document_with_context_multi_model(file_content: bytes, 
+                                            filename: str, 
+                                            temp_dir: str, 
+                                            doc_id: str, 
+                                            openai_api_key: str = None, 
+                                            run_all_models: bool = True, 
+                                            selected_models: set[str] = frozenset(),
+                                            vision_flags: dict[str,bool] = {}) -> Dict:
     """Process document with multi-model vision option"""
     
     file_extension = Path(filename).suffix.lower()
@@ -901,7 +857,13 @@ def process_document_with_context_multi_model(file_content: bytes, filename: str
         pages_data = extract_and_store_images_from_file(file_content, filename, temp_dir, doc_id)
 
         # Generate descriptions with multi-model option
-        pages_data = describe_images_for_pages(pages_data, openai_api_key, run_all_models)
+        pages_data = describe_images_for_pages(
+            pages_data,
+            api_key_override=openai_api_key,
+            run_all_models=run_all_models,
+            enabled_models=selected_models,
+            vision_flags=vision_flags
+        )
 
         # Flatten all image data
         for page in pages_data:
@@ -1477,6 +1439,8 @@ def query_documents(req: DocumentQueryRequest):
         logger.error(f"Error querying documents: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error querying documents: {str(e)}")
 
+
+
 @app.post("/documents/upload-and-process")
 async def upload_and_process_documents(
     files: List[UploadFile] = File(...),
@@ -1486,145 +1450,143 @@ async def upload_and_process_documents(
     store_images: bool = Query(True),
     model_name: str = Query("none"),
     debug_mode: bool = Query(False),
-    run_all_vision_models: bool = Query(True),  # NEW PARAMETER
-    request: Request = None
+    vision_models: str = Query(""),
+    request: Request = None,
 ):
-    """
-    Upload and process documents with image storage and context preservation.
-    """
-    try:
-        # Get OpenAI API key from headers or environment
-        openai_api_key = request.headers.get("X-OpenAI-API-Key") if request else None
-        if not openai_api_key:
-            openai_api_key = os.getenv("OPENAI_API_KEY")
-        
-        if not openai_api_key:
-            logger.warning("No OpenAI API key provided - using other vision models for image descriptions")
-        
-        existing_names = chroma_client.list_collections()
-        if collection_name not in existing_names:
-            raise HTTPException(status_code=404, detail=f"Collection '{collection_name}' not found.")
-        
-        collection = chroma_client.get_collection(name=collection_name)
-        processed_files = []
-        total_chunks = 0
-        total_images = 0
+    # 1) Validate and grab collection
+    openai_api_key = request.headers.get("X-OpenAI-API-Key") or os.getenv("OPEN_AI_API_KEY")
+    if collection_name not in chroma_client.list_collections():
+        raise HTTPException(404, f"Collection '{collection_name}' not found")
+    collection = chroma_client.get_collection(name=collection_name)
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            for file in files:
-                logger.info(f"Processing file: {file.filename} with model: {model_name}")
-                logger.info(f"Multi-model vision mode: {run_all_vision_models}")
-                
-                try:
-                    file_content = await file.read()
-                    doc_id = f"{Path(file.filename).stem}_{uuid.uuid4().hex[:8]}"
+    # 2) Precompute vision settings
+    selected_models: set[str] = {m.strip() for m in vision_models.split(",") if m.strip()}
+    run_all = len(selected_models - {"basic"}) > 1
+    vision_flags = {
+        "openai":        "openai"       in selected_models,
+        "ollama":        "ollama"       in selected_models,
+        "huggingface":   "huggingface"  in selected_models,
+        "enhanced_local":"enhanced_local" in selected_models,
+    }
 
-                    # Process the document with multi-model option
-                    doc_data = process_document_with_context_multi_model(
-                        file_content,
-                        file.filename,
-                        temp_dir,
-                        doc_id,
-                        openai_api_key,
-                        run_all_vision_models  # Pass the parameter
-                    )
+    async def process_one(file: UploadFile):
+        fname = file.filename
+        doc_id = f"{Path(fname).stem}_{uuid.uuid4().hex[:8]}"
+        content = await file.read()
 
-                    # Rest of the processing remains the same...
-                    if not doc_data["content"].strip():
-                        processed_files.append({
-                            "filename": file.filename,
-                            "status": "skipped",
-                            "error": "No content extracted"
-                        })
-                        continue
+        # --- 3a) Offload heavy PDF+vision processing ---
+        doc_data = await asyncio.to_thread(
+            process_document_with_context_multi_model,
+            file_content=content,
+            filename=fname,
+            temp_dir=temp_dir,
+            doc_id=doc_id,
+            openai_api_key=openai_api_key,
+            run_all_models=run_all,
+            selected_models=selected_models,
+            vision_flags=vision_flags, 
+        )
 
-                    if debug_mode:
-                        debug_content_and_images(doc_data["content"], doc_data["images_data"])
+        if not doc_data["content"].strip():
+            return {"filename": fname, "status": "skipped", "error": "No content"}
 
-                    chunks = smart_chunk_with_context(
-                        doc_data["content"],
-                        doc_data["images_data"],
-                        chunk_size,
-                        chunk_overlap
-                    )
+        # Optional debug print
+        if debug_mode:
+            await run_in_threadpool(debug_content_and_images,
+                                        doc_data["content"], doc_data["images_data"])
 
-                    file_chunks = 0
-                    file_images = len(doc_data["images_data"])
+        # --- 3b) Chunk in threadpool (fast) ---
+        chunks = await run_in_threadpool(
+            smart_chunk_with_context,
+            doc_data["content"], doc_data["images_data"], chunk_size, chunk_overlap
+        )
 
-                    for chunk_data in chunks:
-                        embedding = embedding_model.encode([chunk_data["content"]])[0].tolist()
+        # --- 3c) Gather and clean metadata ---
+        texts, ids, metas = [], [], []
+        for c in chunks:
+            texts.append(c["content"])
+            chunk_id = f"{doc_id}_chunk_{c['chunk_index']}"
+            ids.append(chunk_id)
 
-                        metadata = {
-                            "document_id": doc_id,
-                            "document_name": file.filename,
-                            "file_type": doc_data["file_type"],
-                            "chunk_index": chunk_data["chunk_index"],
-                            "total_chunks": len(chunks),
-                            "start_position": chunk_data["start_position"],
-                            "end_position": chunk_data["end_position"],
-                            "has_images": chunk_data["has_images"],
-                            "image_count": len(chunk_data["images"]),
-                            "processed_with": "markitdown_enhanced",
-                            "model_used": model_name,
-                            "timestamp": str(uuid.uuid4()),
-                            "images_stored": store_images,
-                            "openai_api_used": bool(openai_api_key),
-                            "multi_model_vision": run_all_vision_models  # NEW METADATA
-                        }
+            m = {
+                "document_id":       doc_id,
+                "document_name":     fname,
+                "file_type":         doc_data["file_type"],
+                "chunk_index":       c["chunk_index"],
+                "total_chunks":      len(chunks),
+                "has_images":        c["has_images"],
+                "image_count":       len(c["images"]),
+                "start_position":    c["start_position"],
+                "end_position":      c["end_position"],
+                "processed_with":    "markitdown_enhanced",
+                "model_used":        model_name,
+                "timestamp":         str(uuid.uuid4()),
+                "images_stored":     store_images,
+                "openai_api_used":   bool(openai_api_key),
+                "multi_model_vision": run_all,
+                # optional image fields
+                **(
+                    {
+                        "image_filenames":     json.dumps([i["filename"]    for i in c["images"]]),
+                        "image_descriptions":  json.dumps([i["description"] for i in c["images"]]),
+                        "image_storage_paths": json.dumps([i["storage_path"] for i in c["images"]])
+                    } if c["images"] else {}
+                )
+            }
+            metas.append({k: v for k, v in m.items() if v is not None})
 
-                        if chunk_data["images"]:
-                            metadata["image_filenames"] = json.dumps([img["filename"] for img in chunk_data["images"]])
-                            metadata["image_descriptions"] = json.dumps([img["description"] for img in chunk_data["images"]])
-                            metadata["image_storage_paths"] = json.dumps([img["storage_path"] for img in chunk_data["images"]])
+        # --- 3d) Embed offloaded ---
+        embeddings = await asyncio.to_thread(
+            embedding_model.encode,
+            texts, show_progress_bar=False, batch_size=32, convert_to_numpy=True
+        )
+        embeddings = embeddings.tolist()
 
-                        chunk_id = f"{doc_id}_chunk_{chunk_data['chunk_index']}"
-
-                        collection.add(
-                            documents=[chunk_data["content"]],
-                            ids=[chunk_id],
-                            metadatas=[metadata],
-                            embeddings=[embedding]
-                        )
-
-                        file_chunks += 1
-                        total_chunks += 1
-
-                    total_images += file_images
-
-                    processed_files.append({
-                        "filename": file.filename,
-                        "document_id": doc_id,
-                        "file_type": doc_data["file_type"],
-                        "chunks_created": file_chunks,
-                        "images_stored": file_images if store_images else 0,
-                        "status": "success"
-                    })
-
-                except Exception as e:
-                    logger.error(f"Error processing file {file.filename}: {e}")
-                    processed_files.append({
-                        "filename": file.filename,
-                        "status": "error",
-                        "error": str(e)
-                    })
+        # --- 3e) Insert in threadpool ---
+        await run_in_threadpool(
+            collection.add,
+            documents=texts,
+            embeddings=embeddings,
+            metadatas=metas,
+            ids=ids,
+        )
 
         return {
-            "collection": collection_name,
-            "model_used": model_name,
-            "total_files_processed": len([f for f in processed_files if f["status"] == "success"]),
-            "total_chunks_created": total_chunks,
-            "total_images_stored": total_images if store_images else 0,
-            "images_directory": IMAGES_DIR,
-            "processed_files": processed_files,
-            "openai_api_used": bool(openai_api_key),
-            "multi_model_vision_used": run_all_vision_models
+            "filename": fname,
+            "document_id": doc_id,
+            "chunks_created": len(chunks),
+            "images_stored": len(doc_data["images_data"]) if store_images else 0,
+            "status": "success"
         }
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in document processing: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error processing documents: {str(e)}")
+    # 4) Create one tempdir for all tasks
+    with tempfile.TemporaryDirectory() as temp_dir:
+        tasks = [asyncio.create_task(process_one(f)) for f in files]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # 5) Summarize
+    processed, total_chunks, total_images = [], 0, 0
+    for r in results:
+        if isinstance(r, Exception):
+            processed.append({"filename": "-", "status": "error", "error": str(r)})
+        else:
+            processed.append(r)
+            if r["status"] == "success":
+                total_chunks += r["chunks_created"]
+                total_images += r["images_stored"]
+
+    return {
+        "collection": collection_name,
+        "model_used": model_name,
+        "total_files_processed": sum(1 for r in processed if r["status"]=="success"),
+        "total_chunks_created": total_chunks,
+        "total_images_stored": total_images if store_images else 0,
+        "images_directory": IMAGES_DIR,
+        "processed_files": processed,
+        "openai_api_used": bool(openai_api_key),
+        "multi_model_vision_used": vision_models
+    }
+
 
 @app.get("/documents/reconstruct/{document_id}")
 def reconstruct_document(document_id: str, collection_name: str = Query(...)):
