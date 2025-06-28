@@ -1,6 +1,6 @@
 import os
 import uvicorn
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from chromadb.config import Settings
 from chromadb import Client
@@ -59,6 +59,9 @@ os.makedirs(IMAGES_DIR, exist_ok=True)
 
 # Create a standard FastAPI app
 app = FastAPI(title="ChromaDB Dockerized")
+
+# very simple in-memory store; swap out for Redis/db in prod
+jobs: Dict[str, str] = {}
 
         # Fix the environment variable name
 open_ai_api_key = os.getenv("OPEN_AI_API_KEY")  
@@ -384,7 +387,7 @@ def basic_image_analysis(image_path: str) -> str:
         logger.error(f"Basic image analysis failed for {image_path}: {e}")
         return f"Image file: {Path(image_path).name} (analysis failed)"
 
-def describe_images_for_pages(
+async def describe_images_for_pages(
     pages_data: List[Dict],
     api_key_override=None,
     run_all_models: bool = True,
@@ -396,11 +399,8 @@ def describe_images_for_pages(
         for img_path in page["images"]:
             if run_all_models:
                 all_desc = {}
-                if "openai" in enabled_models and vision_flags.get("openai", False):
-                    try:
-                        d = asyncio.run(describe_with_openai_markitdown(img_path, api_key_override))
-                    except Exception:
-                        d = None
+                if "openai" in enabled_models and vision_flags["openai"]:
+                    d = await describe_with_openai_markitdown(img_path, api_key_override)
                     if d:
                         all_desc["OpenAI"] = d
                 if "ollama" in enabled_models and vision_flags.get("ollama", False):
@@ -420,8 +420,8 @@ def describe_images_for_pages(
             else:
                 # first‐success only among enabled & flagged
                 d = None
-                if "openai" in enabled_models and vision_flags.get("openai", False):
-                    d = describe_with_openai_markitdown(img_path, api_key_override)
+                if "openai" in enabled_models and vision_flags["openai"]:
+                    d = await describe_with_openai_markitdown(img_path, api_key_override)
                 if not d and "ollama" in enabled_models and vision_flags.get("ollama", False):
                     d = describe_with_ollama_vision(img_path)
                 if not d and "huggingface" in enabled_models and vision_flags.get("huggingface", False):
@@ -854,18 +854,25 @@ def process_document_with_context_multi_model(file_content: bytes,
 
     # Extract images from file
     if file_extension == '.pdf':
+        # 1) extract images synchronously
         pages_data = extract_and_store_images_from_file(file_content, filename, temp_dir, doc_id)
 
-        # Generate descriptions with multi-model option
-        pages_data = describe_images_for_pages(
-            pages_data,
-            api_key_override=openai_api_key,
-            run_all_models=run_all_models,
-            enabled_models=selected_models,
-            vision_flags=vision_flags
-        )
+        # 2) run async describer on its own loop
+        loop = asyncio.new_event_loop()
+        try:
+            pages_data = loop.run_until_complete(
+                describe_images_for_pages(
+                    pages_data,
+                    api_key_override=openai_api_key,
+                    run_all_models=run_all_models,
+                    enabled_models=selected_models,
+                    vision_flags=vision_flags
+                )
+            )
+        finally:
+            loop.close()
 
-        # Flatten all image data
+        # 3) Flatten all image data
         for page in pages_data:
             for img_path, desc in zip(page["images"], page.get("image_descriptions", [])):
                 images_data.append({
@@ -1080,6 +1087,104 @@ def process_document_with_context(file_content: bytes, filename: str, temp_dir: 
         "file_type": file_extension
     }
 
+def run_ingest_job(
+    job_id: str,
+    payloads: List[Dict[str,Any]],       
+    collection_name: str,
+    chunk_size: int,
+    chunk_overlap: int,
+    store_images: bool,
+    model_name: str,
+    debug_mode: bool,
+    vision_models: List[str],
+    openai_api_key: Optional[str],
+):
+    try:
+        jobs[job_id] = "running"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            collection = chroma_client.get_collection(name=collection_name)
+
+            for item in payloads:
+                fname   = item["filename"]
+                content = item["content"]
+
+                # 1) pick a stable doc_id
+                doc_id = f"{Path(fname).stem}_{uuid.uuid4().hex[:8]}"
+
+                # 2) extract & describe images, process document...
+                pages_data = extract_and_store_images_from_file(content, fname, temp_dir, doc_id)
+                pages_data = asyncio.new_event_loop().run_until_complete(
+                    describe_images_for_pages(
+                        pages_data,
+                        api_key_override=openai_api_key,
+                        run_all_models=len(vision_models)>1,
+                        enabled_models=set(vision_models),
+                        vision_flags={m:(m in vision_models) for m in vision_models},
+                    )
+                )
+                doc_data = process_document_with_context_multi_model(
+                    file_content=content,
+                    filename=fname,
+                    temp_dir=temp_dir,
+                    doc_id=doc_id,
+                    openai_api_key=openai_api_key,
+                    run_all_models=len(vision_models)>1,
+                    selected_models=set(vision_models),
+                    vision_flags={m:(m in vision_models) for m in vision_models},
+                )
+
+                # 3) chunk it
+                chunks = smart_chunk_with_context(doc_data["content"],
+                                                  doc_data["images_data"],
+                                                  chunk_size, chunk_overlap)
+
+                texts = []
+                ids   = []
+                metas = []
+                for c in chunks:
+                    # build a scalar-only metadata dict
+                    meta = {
+                        "document_id":  doc_id,
+                        "document_name":fname,
+                        "file_type":     doc_data["file_type"],
+                        "chunk_index":   c["chunk_index"],
+                        "total_chunks":  len(chunks),
+                        "has_images":    c["has_images"],
+                        "image_count":   len(c["images"]),
+                        "start_position":c["start_position"],
+                        "end_position":  c["end_position"],
+                        "images_stored": store_images
+                    }
+                    # if you really want to keep a list, JSON‐dump it to a string
+                    if c["images"]:
+                        meta["image_filenames"]      = json.dumps([i["filename"]     for i in c["images"]])
+                        meta["image_descriptions"]   = json.dumps([i["description"]  for i in c["images"]])
+                        meta["image_storage_paths"]  = json.dumps([i["storage_path"] for i in c["images"]])
+                    metas.append(meta)
+
+                    texts.append(c["content"])
+                    ids.append(f"{doc_id}_chunk_{c['chunk_index']}")
+
+                # 4) embed + add
+                embeddings = embedding_model.encode(texts, convert_to_numpy=True).tolist()
+                collection.add(
+                    documents  = texts,
+                    embeddings = embeddings,
+                    metadatas  = metas,
+                    ids        = ids,
+                )
+
+
+        jobs[job_id] = "success"
+    except Exception as e:
+        jobs[job_id] = f"error: {e!r}"
+
+
+
+### -------------------------------------------------------------------------- ###
+### Collection Endpoints ###
+### -------------------------------------------------------------------------- ###
+
 
 ### Health Checks ###
 
@@ -1109,7 +1214,9 @@ def health_check():
     }
 
 
-### Collection Endpoints ###
+
+
+
 
 @app.get("/collections")
 def list_collections():
@@ -1440,9 +1547,9 @@ def query_documents(req: DocumentQueryRequest):
         raise HTTPException(status_code=500, detail=f"Error querying documents: {str(e)}")
 
 
-
 @app.post("/documents/upload-and-process")
 async def upload_and_process_documents(
+    background_tasks: BackgroundTasks,
     files: List[UploadFile] = File(...),
     collection_name: str = Query(...),
     chunk_size: int = Query(1000),
@@ -1453,139 +1560,39 @@ async def upload_and_process_documents(
     vision_models: str = Query(""),
     request: Request = None,
 ):
-    # 1) Validate and grab collection
-    openai_api_key = request.headers.get("X-OpenAI-API-Key") or os.getenv("OPEN_AI_API_KEY")
+    # 1) Validate collection
     if collection_name not in chroma_client.list_collections():
         raise HTTPException(404, f"Collection '{collection_name}' not found")
-    collection = chroma_client.get_collection(name=collection_name)
 
-    # 2) Precompute vision settings
-    selected_models: set[str] = {m.strip() for m in vision_models.split(",") if m.strip()}
-    run_all = len(selected_models - {"basic"}) > 1
-    vision_flags = {
-        "openai":        "openai"       in selected_models,
-        "ollama":        "ollama"       in selected_models,
-        "huggingface":   "huggingface"  in selected_models,
-        "enhanced_local":"enhanced_local" in selected_models,
-    }
+    # 2) Generate a single job_id
+    job_id = uuid.uuid4().hex
+    jobs[job_id] = "pending"
 
-    async def process_one(file: UploadFile):
-        fname = file.filename
-        doc_id = f"{Path(fname).stem}_{uuid.uuid4().hex[:8]}"
-        content = await file.read()
+    # 3) Slurp each UploadFile into memory so we can hand off raw bytes
+    payloads: List[Dict[str,Any]] = []
+    for f in files:
+        content = await f.read()
+        payloads.append({"filename": f.filename, "content": content})
 
-        # --- 3a) Offload heavy PDF+vision processing ---
-        doc_data = await asyncio.to_thread(
-            process_document_with_context_multi_model,
-            file_content=content,
-            filename=fname,
-            temp_dir=temp_dir,
-            doc_id=doc_id,
-            openai_api_key=openai_api_key,
-            run_all_models=run_all,
-            selected_models=selected_models,
-            vision_flags=vision_flags, 
-        )
+    # 4) Kick off the background task
+    selected_models = [m.strip() for m in vision_models.split(",") if m.strip()]
+    background_tasks.add_task(
+        run_ingest_job,
+        job_id,
+        payloads,
+        collection_name,
+        chunk_size,
+        chunk_overlap,
+        store_images,
+        model_name,
+        debug_mode,
+        selected_models,
+        request.headers.get("X-OpenAI-API-Key") or open_ai_api_key,
+    )
 
-        if not doc_data["content"].strip():
-            return {"filename": fname, "status": "skipped", "error": "No content"}
+    # 5) Return immediately with the job ID
+    return {"job_id": job_id}
 
-        # Optional debug print
-        if debug_mode:
-            await run_in_threadpool(debug_content_and_images,
-                                        doc_data["content"], doc_data["images_data"])
-
-        # --- 3b) Chunk in threadpool (fast) ---
-        chunks = await run_in_threadpool(
-            smart_chunk_with_context,
-            doc_data["content"], doc_data["images_data"], chunk_size, chunk_overlap
-        )
-
-        # --- 3c) Gather and clean metadata ---
-        texts, ids, metas = [], [], []
-        for c in chunks:
-            texts.append(c["content"])
-            chunk_id = f"{doc_id}_chunk_{c['chunk_index']}"
-            ids.append(chunk_id)
-
-            m = {
-                "document_id":       doc_id,
-                "document_name":     fname,
-                "file_type":         doc_data["file_type"],
-                "chunk_index":       c["chunk_index"],
-                "total_chunks":      len(chunks),
-                "has_images":        c["has_images"],
-                "image_count":       len(c["images"]),
-                "start_position":    c["start_position"],
-                "end_position":      c["end_position"],
-                "processed_with":    "markitdown_enhanced",
-                "model_used":        model_name,
-                "timestamp":         str(uuid.uuid4()),
-                "images_stored":     store_images,
-                "openai_api_used":   bool(openai_api_key),
-                "multi_model_vision": run_all,
-                # optional image fields
-                **(
-                    {
-                        "image_filenames":     json.dumps([i["filename"]    for i in c["images"]]),
-                        "image_descriptions":  json.dumps([i["description"] for i in c["images"]]),
-                        "image_storage_paths": json.dumps([i["storage_path"] for i in c["images"]])
-                    } if c["images"] else {}
-                )
-            }
-            metas.append({k: v for k, v in m.items() if v is not None})
-
-        # --- 3d) Embed offloaded ---
-        embeddings = await asyncio.to_thread(
-            embedding_model.encode,
-            texts, show_progress_bar=False, batch_size=32, convert_to_numpy=True
-        )
-        embeddings = embeddings.tolist()
-
-        # --- 3e) Insert in threadpool ---
-        await run_in_threadpool(
-            collection.add,
-            documents=texts,
-            embeddings=embeddings,
-            metadatas=metas,
-            ids=ids,
-        )
-
-        return {
-            "filename": fname,
-            "document_id": doc_id,
-            "chunks_created": len(chunks),
-            "images_stored": len(doc_data["images_data"]) if store_images else 0,
-            "status": "success"
-        }
-
-    # 4) Create one tempdir for all tasks
-    with tempfile.TemporaryDirectory() as temp_dir:
-        tasks = [asyncio.create_task(process_one(f)) for f in files]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    # 5) Summarize
-    processed, total_chunks, total_images = [], 0, 0
-    for r in results:
-        if isinstance(r, Exception):
-            processed.append({"filename": "-", "status": "error", "error": str(r)})
-        else:
-            processed.append(r)
-            if r["status"] == "success":
-                total_chunks += r["chunks_created"]
-                total_images += r["images_stored"]
-
-    return {
-        "collection": collection_name,
-        "model_used": model_name,
-        "total_files_processed": sum(1 for r in processed if r["status"]=="success"),
-        "total_chunks_created": total_chunks,
-        "total_images_stored": total_images if store_images else 0,
-        "images_directory": IMAGES_DIR,
-        "processed_files": processed,
-        "openai_api_used": bool(openai_api_key),
-        "multi_model_vision_used": vision_models
-    }
 
 
 @app.get("/documents/reconstruct/{document_id}")
@@ -1700,6 +1707,13 @@ def get_stored_image(image_filename: str):
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error reading image: {str(e)}")
+    
+@app.get("/jobs/{job_id}")
+def get_job_status(job_id: str):
+    status = jobs.get(job_id)
+    if status is None:
+        raise HTTPException(404, f"Job {job_id} not found")
+    return {"job_id": job_id, "status": status}
 
 ### Run with Uvicorn if called directly ###
 if __name__ == "__main__":

@@ -8,6 +8,8 @@ from io import BytesIO
 from PIL import Image
 import pandas as pd
 from sentence_transformers import SentenceTransformer
+import time
+import re
 
 torch.classes.__path__ = [] 
 
@@ -101,6 +103,53 @@ def query_documents(collection_name, query_text, n_results=5):
     except Exception as e:
         st.error(f"Error querying documents: {str(e)}")
         return None
+    
+def start_ingest(files, collection_name, chunk_size, chunk_overlap,
+                store_images, model_name, debug_mode, vision_models):
+    # Build the multipart files payload
+    payload = []
+    for f in files:
+        # f is a Streamlit UploadedFile
+        # we need ( fieldname, (filename, bytes, content_type) )
+        payload.append((
+            "files",
+            (f.name, f.read(), f.type)
+        ))
+
+    params = {
+        "collection_name": collection_name,
+        "chunk_size": chunk_size,
+        "chunk_overlap": chunk_overlap,
+        "store_images": store_images,
+        "model_name": model_name,
+        "debug_mode": debug_mode,
+        "vision_models": ",".join(vision_models),
+    }
+
+    resp = requests.post(
+        f"{CHROMADB_API}/documents/upload-and-process",
+        params=params,
+        files=payload,
+        timeout=60
+    )
+    resp.raise_for_status()
+    return resp.json()["job_id"]
+
+
+def wait_for_job(job_id, poll_interval=2):
+    """Poll /jobs until status != pending/running."""
+    while True:
+        r = requests.get(f"{CHROMADB_API}/jobs/{job_id}", timeout=10)
+        r.raise_for_status()
+        status = r.json().get("status")
+        if status in ("pending", "running"):
+            time.sleep(poll_interval)
+            continue
+        return status
+
+## -------------------------------------------------------- 
+# Streamlit app configuration
+# --------------------------------------------------------
 
 st.set_page_config(page_title="Document Management", layout="wide")
 st.title("Document & Collection Management")
@@ -140,7 +189,39 @@ with col1:
 
 # Create a new collection
 with col2:
-    new_collection = st.text_input("New Collection Name")
+    st.subheader("Create New Collection")
+    new_collection = st.text_input("New Collection Name", placeholder="Enter collection name (e.g., 'my documents')")
+    
+    if new_collection:
+        # Normalize collection name according to ChromaDB rules
+        normalized_name = new_collection.strip().lower()
+        # Replace spaces with underscores
+        normalized_name = normalized_name.replace(' ', '_')
+        # Keep only alphanumeric, underscores, and hyphens
+        normalized_name = re.sub(r'[^a-zA-Z0-9_-]', '', normalized_name)
+        # Ensure it starts and ends with alphanumeric
+        normalized_name = re.sub(r'^[^a-zA-Z0-9]+', '', normalized_name)
+        normalized_name = re.sub(r'[^a-zA-Z0-9]+$', '', normalized_name)
+        
+        # Ensure length is 3-63 characters
+        if len(normalized_name) < 3:
+            normalized_name = normalized_name + "_collection"
+        elif len(normalized_name) > 63:
+            normalized_name = normalized_name[:60] + "..."
+            # Ensure it still ends with alphanumeric after truncation
+            normalized_name = re.sub(r'[^a-zA-Z0-9]+$', '', normalized_name)
+        
+        # Show normalization if changed
+        if normalized_name != new_collection:
+            st.info(f"Collection name will be normalized to: `{normalized_name}`")
+        
+        # Validate final name
+        if len(normalized_name) < 3:
+            st.error("Collection name must be at least 3 characters after normalization")
+            new_collection = None
+        else:
+            new_collection = normalized_name
+        
     if st.button("Create Collection"):
         try:
             response = requests.post(
@@ -187,7 +268,7 @@ if collections:
             vision_status = {}
         
         # Model selection with status indicators
-        col_a, col_b, col_c = st.columns(3)
+        col_a, col_b = st.columns(2)
         
         with col_a:
             openai_available = vision_status.get("openai_enabled", False)
@@ -218,10 +299,7 @@ if collections:
                                         value=True,
                                         help="OpenCV + OCR analysis with color/shape detection")
         
-        with col_c:
-            use_basic = st.checkbox("Basic Analysis", 
-                                    value=True,
-                                    help="Simple metadata + OCR fallback")
+
         
         # Build selected models list
         selected_models = []
@@ -233,8 +311,9 @@ if collections:
             selected_models.append("huggingface")
         if use_enhanced:
             selected_models.append("enhanced_local")
-        if use_basic:
-            selected_models.append("basic")
+        
+        # always include basic analysis
+        selected_models.append("basic")
         
         # Show selection summary
         if selected_models:
@@ -258,48 +337,36 @@ if collections:
     
     if uploaded_files and st.button("Process & Store Documents", disabled=not selected_models):
         try:
-            with st.spinner(f"Processing documents with {len(selected_models)} vision models..."):
-                # Show processing status
-                progress_text = f"Running: {', '.join(selected_models).title()}"
-                st.write(progress_text)
-                
-                results = store_files_in_chromadb_parallel(
-                    uploaded_files,
-                    collection_name,
-                    openai_api_key=os.getenv("OPEN_AI_API_KEY"),
-                    selected_models=selected_models,
-                    max_workers=min(4, len(uploaded_files))
-                )
+            # 1) kick off ingestion
+            job_id = start_ingest(
+                uploaded_files,
+                collection_name,
+                chunk_size,
+                chunk_overlap,
+                store_images,
+                selected_models,
+                debug_mode,
+                selected_models
+            )
+            st.info(f"Ingestion started")
 
-                st.success(f"Documents stored in collection '{collection_name}'!")
-                
-                with st.expander("Uploaded Document Details"):
-                    for doc in results.get("processed_files", []):
-                        if doc.get("status") == "success":
-                            models_used = doc.get("vision_models_used", [])
-                            st.markdown(f"""
-                            **{doc['filename']}**  
-                            - Status: {doc['status']}  
-                            - Document ID: `{doc['document_id']}`  
-                            - Chunks: {doc['chunks_created']}  
-                            - Images Stored: {doc['images_stored']}  
-                            - Vision Models: {', '.join(models_used).title()}
-                            """)
-                            st.session_state['latest_doc_id'] = doc['document_id']
-                        else:
-                            st.warning(f"{doc['filename']} — {doc.get('error', 'Unknown error')}")
-                
-                # Show processing summary
-                with st.expander("Processing Summary"):
-                    st.write(f"**Total Files Processed**: {results.get('total_files_processed', 0)}")
-                    st.write(f"**Total Chunks Created**: {results.get('total_chunks_created', 0)}")
-                    st.write(f"**Total Images Stored**: {results.get('total_images_stored', 0)}")
-                    st.write(f"**Vision Models Used**: {', '.join(results.get('vision_models_used', [])).title()}")
-                    st.write(f"**OpenAI API Used**: {results.get('open_ai_api_used', False)}")
-                        
+            # 2) wait for it to finish
+            with st.spinner("Uploading and processing in background…"):
+                final_status = wait_for_job(job_id)
+
+            # 3) check result
+            if final_status == "success":
+                st.success("Ingestion complete!")
+                collections = fetch_collections()
+            else:
+                st.error(f"Ingestion failed: {final_status}")
+
         except Exception as e:
-            st.error(f"Error storing documents: {str(e)}")
-                
+            st.error(f"Error starting ingestion: {e}")
+
+
+            st.success(f"Documents stored in collection '{collection_name}'!")
+            
 else:
     st.warning("No collections exist. Please create one first.")
     
