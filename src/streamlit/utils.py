@@ -384,30 +384,36 @@ def get_image_from_chromadb(filename):
         print(f"Error fetching image {filename}: {e}")
         return None
 
-def render_reconstructed_document(result: dict):
-    """Render reconstructed document with enhanced image handling"""
-    rich_content = result.get("reconstructed_content", "")
-    images = result.get("images", [])
+def render_reconstructed_document(result):
+    """Renders the reconstructed text and inlines all images with st.image."""
+    md = result["reconstructed_content"]
 
-    # Replace image markers with base64 images + description
-    for image in images:
-        marker = f"[IMAGE:{image['filename']}]"
-        img_url = f"{CHROMADB_API}/images/{image['filename']}"
-        base64_img = image_to_base64(img_url)
-        description = image.get("description", "")
-        
-        # Enhanced replacement with better formatting
-        replacement = f"""
-{base64_img}
+    # 1) Show the text first
+    with st.expander("Reconstructed Document Text"):
+        st.markdown(md, unsafe_allow_html=True)
 
-**Image Analysis:** {description}
+    # 2) Then, for each image, re-use your existing logic
+    if result.get("images"):
+        with st.expander("Inline Images"):
+            for i, img in enumerate(result["images"], 1):
+                st.subheader(f"Image {i}: {img['filename']}")
+                col1, col2 = st.columns([1, 2])
 
----
-"""
-        rich_content = rich_content.replace(marker, replacement)
+                # left: actual image
+                with col1:
+                    try:
+                        resp = requests.get(f"{CHROMADB_API}/images/{img['filename']}")
+                        resp.raise_for_status()
+                        image = Image.open(BytesIO(resp.content))
+                        st.image(image, caption=img['filename'] )
+                    except:
+                        st.write("Image preview not available")
 
-    # Display the content
-    st.markdown(rich_content, unsafe_allow_html=True)
+                # right: metadata + description
+                with col2:
+                    st.write(f"**Storage Path:** `{img['storage_path']}`")
+                    st.text_area("Description", img["description"], height=150, key=f"recon_desc_{i}")
+
 
 def clean_text(text):
     """Remove null bytes and non-XML-safe characters"""

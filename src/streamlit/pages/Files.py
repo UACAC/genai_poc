@@ -329,7 +329,6 @@ if collections:
         
         # Processing options
         store_images = st.checkbox("Store Images", value=True)
-        debug_mode = st.checkbox("Debug Mode", value=False)
     
     with col2:
         chunk_size = st.number_input("Chunk Size", min_value=100, max_value=5000, value=1000)
@@ -421,37 +420,8 @@ if collections:
                 # Create a nice table
                 df = pd.DataFrame(documents)
                 
-                # Make document_id clickable by storing in session state
-                selected_idx = st.selectbox(
-                    "Select a document to view details:",
-                    range(len(documents)),
-                    format_func=lambda x: f"{documents[x]['document_name']} ({documents[x]['document_id'][:8]}...)"
-                )
-                
-                if selected_idx is not None:
-                    selected_doc = documents[selected_idx]
-                    
-                    col1, col2 = st.columns([2, 1])
-                    
-                    with col1:
-                        st.subheader("Document Details")
-                        st.write(f"**Name**: {selected_doc['document_name']}")
-                        st.write(f"**Type**: {selected_doc['file_type']}")
-                        st.write(f"**Chunks**: {selected_doc['total_chunks']}")
-                        st.write(f"**Has Images**: {selected_doc['has_images']}")
-                        if selected_doc['has_images']:
-                            st.write(f"**Image Count**: {selected_doc['image_count']}")
-                    
-                    with col2:
-                        st.subheader("Actions")
-                        # Auto-fill the document ID for reconstruction
-                        if st.button("Use for Reconstruction", key=f"reconstruct_{selected_idx}"):
-                            st.session_state['selected_doc_id'] = selected_doc['document_id']
-                            st.success(f"Document ID set: {selected_doc['document_id'][:16]}...")
-                
                 # Show full table
-                with st.expander("All Documents Table"):
-                    st.dataframe(df, use_container_width=True)
+                st.dataframe(df, use_container_width=True)
             else:
                 st.info("No documents found in this collection.")
                 
@@ -491,37 +461,6 @@ if collections:
                     st.write(f"**Total Chunks**: {result['total_chunks']}")
                     st.write(f"**File Type**: {result['metadata']['file_type']}")
                     st.write(f"**Total Images**: {result['metadata']['total_images']}")
-                    st.write(f"**OpenAI API Used**: {result['metadata'].get('openai_api_used', 'Unknown')}")
-
-                # Show image analysis details
-                if result.get('images'):
-                    with st.expander("Image Analysis Details"):
-                        for i, img in enumerate(result['images'], 1):
-                            st.subheader(f"Image {i}: {img['filename']}")
-                            
-                            col1, col2 = st.columns([1, 2])
-                            
-                            with col1:
-                                # Try to display the actual image
-                                try:
-                                    img_response = requests.get(f"{CHROMADB_API}/images/{img['filename']}")
-                                    if img_response.status_code == 200:
-                                        image = Image.open(BytesIO(img_response.content))
-                                        st.image(image, caption=img['filename'], width=200)
-                                    else:
-                                        st.write("Image preview not available")
-                                except:
-                                    st.write("Image preview not available")
-                            
-                            with col2:
-                                st.write(f"**Exists**: {'✅' if img['exists'] else '❌'}")
-                                st.write(f"**Path**: {img['storage_path']}")
-                                st.text_area(
-                                    "Description", 
-                                    img['description'], 
-                                    height=150, 
-                                    key=f"img_desc_{i}"
-                                )
 
                 # Build rich markdown with embedded images
                 render_reconstructed_document(result)
@@ -564,45 +503,7 @@ if collections:
         except Exception as e:
             st.error(f"Error reconstructing document: {str(e)}")
             
-def show_model_comparison_section():
-    """Add this section to your Streamlit app to compare model performance"""
-    
-    st.header("🔍 Vision Model Comparison")
-    
-    with st.expander("Vision Model Characteristics"):
-        
-        comparison_data = {
-            "Model": ["OpenAI GPT-4V", "Ollama LLaVA", "HuggingFace BLIP", "Enhanced Local", "Basic Analysis"],
-            "Speed": ["Slow (API)", "Medium", "Fast", "Fast", "Very Fast"],
-            "Quality": ["Excellent", "Good", "Good", "Technical", "Basic"],
-            "Cost": ["API Cost", "Free", "Free", "Free", "Free"],
-            "Best For": [
-                "Rich semantic descriptions",
-                "Local privacy, good descriptions", 
-                "Quick captions",
-                "Technical analysis, OCR",
-                "Metadata only"
-            ],
-            "Example Output": [
-                "A joyful brown dog with its tongue...",
-                "Dog with brown fur showing tongue",
-                "a dog with its tongue out",
-                "Medium-res JPEG, red tones, 972x648px",
-                "JPEG image, RGB mode, no text"
-            ]
-        }
-        
-        df = pd.DataFrame(comparison_data)
-        st.table(df)
-        
-        st.subheader("Recommendations")
-        st.markdown("""
-        - **For Research/Analysis**: Use OpenAI + Enhanced Local
-        - **For Speed**: Use Enhanced Local + Basic only  
-        - **For Privacy**: Use Ollama + HuggingFace + Enhanced Local
-        - **For Comprehensive**: Enable all available models
-        - **For Production**: Test with 2-3 models, then optimize based on your needs
-        """)
+
 
 # ---- DEBUGGING SECTION ----
 with st.sidebar:

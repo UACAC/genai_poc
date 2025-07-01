@@ -25,11 +25,13 @@ from dotenv import load_dotenv
 from transformers import BlipProcessor, BlipForConditionalGeneration
 import cv2
 from fastapi.concurrency import run_in_threadpool
-import asyncio, tempfile, uuid, json, os
+import asyncio, tempfile, uuid, json
 from fastapi import UploadFile, File, Query, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 import asyncio, tempfile, uuid, json, os, functools
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 
 
 load_dotenv()
@@ -1086,10 +1088,14 @@ def process_document_with_context(file_content: bytes, filename: str, temp_dir: 
         "images_data": images_data,
         "file_type": file_extension
     }
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import os
+import tempfile
+import asyncio
 
 def run_ingest_job(
     job_id: str,
-    payloads: List[Dict[str,Any]],       
+    payloads: List[Dict[str, Any]],
     collection_name: str,
     chunk_size: int,
     chunk_overlap: int,
@@ -1099,85 +1105,98 @@ def run_ingest_job(
     vision_models: List[str],
     openai_api_key: Optional[str],
 ):
-    try:
-        jobs[job_id] = "running"
-        with tempfile.TemporaryDirectory() as temp_dir:
-            collection = chroma_client.get_collection(name=collection_name)
+    jobs[job_id] = "running"
 
-            for item in payloads:
-                fname   = item["filename"]
-                content = item["content"]
+    # decide thread-pool size
+    max_workers = min(2, os.cpu_count() or 1)
 
-                # 1) pick a stable doc_id
-                doc_id = f"{Path(fname).stem}_{uuid.uuid4().hex[:8]}"
+    def get_chromadb_collection():
+        # each thread gets its own client/collection
+        settings = Settings(persist_directory=PERSIST_DIR, anonymized_telemetry=False)
+        client = Client(settings)
+        return client.get_collection(name=collection_name)
 
-                # 2) extract & describe images, process document...
-                pages_data = extract_and_store_images_from_file(content, fname, temp_dir, doc_id)
-                pages_data = asyncio.new_event_loop().run_until_complete(
-                    describe_images_for_pages(
-                        pages_data,
-                        api_key_override=openai_api_key,
-                        run_all_models=len(vision_models)>1,
-                        enabled_models=set(vision_models),
-                        vision_flags={m:(m in vision_models) for m in vision_models},
-                    )
+    def process_one(item):
+        fname = item["filename"]
+        content = item["content"]
+        document_id =  uuid.uuid4().hex
+
+        # 1) extract images
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            pages_data = extract_and_store_images_from_file(content, fname, tmp_dir, fname)
+
+            # 2) describe images
+            pages_data = asyncio.new_event_loop().run_until_complete(
+                describe_images_for_pages(
+                    pages_data,
+                    api_key_override=openai_api_key,
+                    run_all_models=len(vision_models) > 1,
+                    enabled_models=set(vision_models),
+                    vision_flags={m: (m in vision_models) for m in vision_models},
                 )
-                doc_data = process_document_with_context_multi_model(
-                    file_content=content,
-                    filename=fname,
-                    temp_dir=temp_dir,
-                    doc_id=doc_id,
-                    openai_api_key=openai_api_key,
-                    run_all_models=len(vision_models)>1,
-                    selected_models=set(vision_models),
-                    vision_flags={m:(m in vision_models) for m in vision_models},
-                )
+            )
 
-                # 3) chunk it
-                chunks = smart_chunk_with_context(doc_data["content"],
-                                                  doc_data["images_data"],
-                                                  chunk_size, chunk_overlap)
+            # 3) full-document processing
+            doc_data = process_document_with_context_multi_model(
+                file_content=content,
+                filename=fname,
+                temp_dir=tmp_dir,
+                doc_id=fname,
+                openai_api_key=openai_api_key,
+                run_all_models=len(vision_models) > 1,
+                selected_models=set(vision_models),
+                vision_flags={m: (m in vision_models) for m in vision_models},
+            )
 
-                texts = []
-                ids   = []
-                metas = []
-                for c in chunks:
-                    # build a scalar-only metadata dict
-                    meta = {
-                        "document_id":  doc_id,
-                        "document_name":fname,
-                        "file_type":     doc_data["file_type"],
-                        "chunk_index":   c["chunk_index"],
-                        "total_chunks":  len(chunks),
-                        "has_images":    c["has_images"],
-                        "image_count":   len(c["images"]),
-                        "start_position":c["start_position"],
-                        "end_position":  c["end_position"],
-                        "images_stored": store_images
-                    }
-                    # if you really want to keep a list, JSON‐dump it to a string
-                    if c["images"]:
-                        meta["image_filenames"]      = json.dumps([i["filename"]     for i in c["images"]])
-                        meta["image_descriptions"]   = json.dumps([i["description"]  for i in c["images"]])
-                        meta["image_storage_paths"]  = json.dumps([i["storage_path"] for i in c["images"]])
-                    metas.append(meta)
+            # 4) chunk → embed → insert
+            chunks = smart_chunk_with_context(
+                doc_data["content"], doc_data["images_data"], chunk_size, chunk_overlap
+            )
+            texts = [c["content"] for c in chunks]
+            ids   = [f"{fname}_chunk_{c['chunk_index']}" for c in chunks]
 
-                    texts.append(c["content"])
-                    ids.append(f"{doc_id}_chunk_{c['chunk_index']}")
+            # build scalar‐only metadata, JSON‐dump any lists
+            metas = []
+            for c in chunks:
+                meta = {
+                    "document_id": document_id,
+                    "document_name": fname,
+                    "file_type": doc_data["file_type"],
+                    "chunk_index": c["chunk_index"],
+                    "total_chunks":  len(chunks),
+                    "has_images": c["has_images"],
+                    "image_count": len(c["images"]),
+                    "start_position": c["start_position"],
+                    "end_position": c["end_position"],
+                    "images_stored": store_images,
+                }
+                if c["images"]:
+                    meta["image_filenames"]            = json.dumps([i["filename"]    for i in c["images"]])
+                    meta["image_descriptions"]         = json.dumps([i["description"] for i in c["images"]])
+                    meta["image_storage_paths"]        = json.dumps([i["storage_path"] for i in c["images"]])
+                metas.append(meta)
 
-                # 4) embed + add
-                embeddings = embedding_model.encode(texts, convert_to_numpy=True).tolist()
-                collection.add(
-                    documents  = texts,
-                    embeddings = embeddings,
-                    metadatas  = metas,
-                    ids        = ids,
-                )
+            embeddings = embedding_model.encode(texts, convert_to_numpy=True).tolist()
 
+            # insert into fresh collection handle
+            coll = get_chromadb_collection()
+            coll.add(documents=texts, embeddings=embeddings, metadatas=metas, ids=ids)
 
-        jobs[job_id] = "success"
-    except Exception as e:
-        jobs[job_id] = f"error: {e!r}"
+        return fname
+
+    # launch threads
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = { pool.submit(process_one, p): p["filename"] for p in payloads }
+        for fut in as_completed(futures):
+            fname = futures[fut]
+            try:
+                fut.result()
+                logger.info(f"[{job_id}] Finished ingest of {fname}")
+            except Exception as e:
+                logger.error(f"[{job_id}] Error ingesting {fname}: {e!r}")
+
+    jobs[job_id] = "success"
+
 
 
 
