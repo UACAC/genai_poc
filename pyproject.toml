@@ -47,6 +47,7 @@ opencv-python = "^4.11.0.86"
 transformers = "^4.36.0"
 pdf2image = "^1.17.0"
 poppler-utils = "^0.1.0"
+redis = "^6.2.0"
 
 
 [build-system]

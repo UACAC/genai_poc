@@ -1,37 +1,27 @@
-import os
 import uvicorn
-from fastapi import FastAPI, Query, HTTPException, BackgroundTasks
+from fastapi import FastAPI, Query, HTTPException, BackgroundTasks, UploadFile, File, Query, HTTPException, Request, Response
 from pydantic import BaseModel
 from chromadb.config import Settings
 from chromadb import Client
-import json
-import uuid
-import tempfile
 from pathlib import Path
 from typing import List, Optional, Dict, Any
-from fastapi import UploadFile, File, Response
 from sentence_transformers import SentenceTransformer
 from markitdown import MarkItDown
 from PyPDF2 import PdfReader
-from fastapi import Request
 import logging
 import pytesseract
 from PIL import Image
 import requests
 import base64
 import numpy as np
-from collections import Counter
+import datetime
 from dotenv import load_dotenv
-from transformers import BlipProcessor, BlipForConditionalGeneration
 import cv2
-from fastapi.concurrency import run_in_threadpool
-import asyncio, tempfile, uuid, json
-from fastapi import UploadFile, File, Query, HTTPException, Request
-from fastapi.concurrency import run_in_threadpool
 import asyncio, tempfile, uuid, json, os, functools
-from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
+from zipfile import ZipFile
+from bs4 import BeautifulSoup
+import redis
 
 
 load_dotenv()
@@ -54,6 +44,8 @@ chroma_client = Client(settings)
 # Initialize embedding model
 embedding_model = SentenceTransformer('multi-qa-mpnet-base-dot-v1')
 
+
+
 # Image storage directory
 IMAGES_DIR = os.path.join(os.getcwd(), "stored_images")
 os.makedirs(IMAGES_DIR, exist_ok=True)
@@ -63,9 +55,15 @@ os.makedirs(IMAGES_DIR, exist_ok=True)
 app = FastAPI(title="ChromaDB Dockerized")
 
 # very simple in-memory store; swap out for Redis/db in prod
-jobs: Dict[str, str] = {}
+# jobs: Dict[str, str] = {}
+# Redis-backed job store
+redis_client = redis.Redis(
+    host=os.getenv("REDIS_HOST", "redis"),
+    port=int(os.getenv("REDIS_PORT", 6379)),
+    db=0,
+    decode_responses=True
+)
 
-        # Fix the environment variable name
 open_ai_api_key = os.getenv("OPEN_AI_API_KEY")  
 
 VISION_CONFIG = {
@@ -177,7 +175,7 @@ def describe_with_ollama_vision(image_path: str) -> Optional[str]:
             f"{VISION_CONFIG['ollama_url']}/api/generate",
             json={
                 "model": VISION_CONFIG['ollama_model'],
-                "prompt": "Describe this image in detail, focusing on the main subjects, colors, and any text visible. Be specific and descriptive.",
+                "prompt": "Describe this image succicntly, focusing on the text found in the image. Be specific and descriptive.",
                 "images": [img_data],
                 "stream": False
             },
@@ -582,126 +580,126 @@ def extract_and_store_images_from_file(file_content: bytes, filename: str, temp_
     return pages_data
 
 
-def process_document_with_context(file_content: bytes, filename: str, temp_dir: str, doc_id: str, openai_api_key: str = None) -> Dict:
-    """Process document maintaining context and storing images and their descriptions using MarkItDown"""
+# def process_document_with_context(file_content: bytes, filename: str, temp_dir: str, doc_id: str, openai_api_key: str = None) -> Dict:
+#     """Process document maintaining context and storing images and their descriptions using MarkItDown"""
 
-    file_extension = Path(filename).suffix.lower()
-    images_data = []
+#     file_extension = Path(filename).suffix.lower()
+#     images_data = []
 
-    # --- Step 1: Extract images from file ---
-    if file_extension == '.pdf':
-        pages_data = extract_and_store_images_from_file(file_content, filename, temp_dir, doc_id)
+#     # --- Step 1: Extract images from file ---
+#     if file_extension == '.pdf':
+#         pages_data = extract_and_store_images_from_file(file_content, filename, temp_dir, doc_id)
 
-        # --- Step 2: Generate descriptions with MarkItDown ---
-        pages_data = describe_images_for_pages(pages_data, openai_api_key)
+#         # --- Step 2: Generate descriptions with MarkItDown ---
+#         pages_data = describe_images_for_pages(pages_data, openai_api_key)
 
-        # --- Step 3: Flatten all image data ---
-        for page in pages_data:
-            for img_path, desc in zip(page["images"], page.get("image_descriptions", [])):
-                images_data.append({
-                    "filename": Path(img_path).name,
-                    "storage_path": img_path,
-                    "description": desc,
-                    "position_marker": f"[IMAGE:{Path(img_path).name}]",
-                    "page": page["page"]
-                })
+#         # --- Step 3: Flatten all image data ---
+#         for page in pages_data:
+#             for img_path, desc in zip(page["images"], page.get("image_descriptions", [])):
+#                 images_data.append({
+#                     "filename": Path(img_path).name,
+#                     "storage_path": img_path,
+#                     "description": desc,
+#                     "position_marker": f"[IMAGE:{Path(img_path).name}]",
+#                     "page": page["page"]
+#                 })
 
-    # --- Step 4: Save the original file ---
-    temp_file_path = os.path.join(temp_dir, filename)
-    with open(temp_file_path, 'wb') as f:
-        f.write(file_content)
+#     # --- Step 4: Save the original file ---
+#     temp_file_path = os.path.join(temp_dir, filename)
+#     with open(temp_file_path, 'wb') as f:
+#         f.write(file_content)
 
-    # --- Step 5: Run MarkItDown on entire document ---
-    try:
-        md_instance = get_markitdown_instance(openai_api_key)
-        result = md_instance.convert(temp_file_path)
-        content = result.text_content if hasattr(result, 'text_content') else str(result)
-        logger.info(f"MarkItDown extracted content length: {len(content)} characters")
-    except Exception as e:
-        logger.error(f"MarkItDown processing failed for {filename}: {e}")
-        if file_extension == '.txt':
-            content = file_content.decode('utf-8', errors='ignore')
-        else:
-            # If MarkItDown fails, create basic content structure
-            content = f"Document: {filename}\n\nContent could not be extracted via MarkItDown."
+#     # --- Step 5: Run MarkItDown on entire document ---
+#     try:
+#         md_instance = get_markitdown_instance(openai_api_key)
+#         result = md_instance.convert(temp_file_path)
+#         content = result.text_content if hasattr(result, 'text_content') else str(result)
+#         logger.info(f"MarkItDown extracted content length: {len(content)} characters")
+#     except Exception as e:
+#         logger.error(f"MarkItDown processing failed for {filename}: {e}")
+#         if file_extension == '.txt':
+#             content = file_content.decode('utf-8', errors='ignore')
+#         else:
+#             # If MarkItDown fails, create basic content structure
+#             content = f"Document: {filename}\n\nContent could not be extracted via MarkItDown."
 
-    # --- Step 6: Enhanced image integration strategy ---
-    if images_data:
-        logger.info(f"Integrating {len(images_data)} images into document content")
+#     # --- Step 6: Enhanced image integration strategy ---
+#     if images_data:
+#         logger.info(f"Integrating {len(images_data)} images into document content")
         
-        # Strategy 1: If content is very short or empty, create a structured document
-        if len(content.strip()) < 50:
-            logger.info("Content is minimal, creating structured document with images")
-            enhanced_content = [f"Document: {filename}\n"]
+#         # Strategy 1: If content is very short or empty, create a structured document
+#         if len(content.strip()) < 50:
+#             logger.info("Content is minimal, creating structured document with images")
+#             enhanced_content = [f"Document: {filename}\n"]
             
-            # Group images by page
-            pages_with_images = {}
-            for img_data in images_data:
-                page_num = img_data.get("page", 1)
-                if page_num not in pages_with_images:
-                    pages_with_images[page_num] = []
-                pages_with_images[page_num].append(img_data)
+#             # Group images by page
+#             pages_with_images = {}
+#             for img_data in images_data:
+#                 page_num = img_data.get("page", 1)
+#                 if page_num not in pages_with_images:
+#                     pages_with_images[page_num] = []
+#                 pages_with_images[page_num].append(img_data)
             
-            # Add each page with its images
-            for page_num in sorted(pages_with_images.keys()):
-                enhanced_content.append(f"\n--- Page {page_num} ---\n")
-                for img_data in pages_with_images[page_num]:
-                    enhanced_content.append(f"{img_data['position_marker']}")
-                    enhanced_content.append(f"Image Description: {img_data['description']}\n")
+#             # Add each page with its images
+#             for page_num in sorted(pages_with_images.keys()):
+#                 enhanced_content.append(f"\n--- Page {page_num} ---\n")
+#                 for img_data in pages_with_images[page_num]:
+#                     enhanced_content.append(f"{img_data['position_marker']}")
+#                     enhanced_content.append(f"Image Description: {img_data['description']}\n")
             
-            content = "\n".join(enhanced_content)
+#             content = "\n".join(enhanced_content)
         
-        else:
-            # Strategy 2: Insert images into existing content
-            logger.info("Inserting images into existing content")
+#         else:
+#             # Strategy 2: Insert images into existing content
+#             logger.info("Inserting images into existing content")
             
-            # Split content into sections (paragraphs or lines)
-            if '\n\n' in content:
-                sections = content.split('\n\n')
-                separator = '\n\n'
-            else:
-                sections = content.split('\n')
-                separator = '\n'
+#             # Split content into sections (paragraphs or lines)
+#             if '\n\n' in content:
+#                 sections = content.split('\n\n')
+#                 separator = '\n\n'
+#             else:
+#                 sections = content.split('\n')
+#                 separator = '\n'
             
-            enhanced_sections = []
-            images_inserted = 0
+#             enhanced_sections = []
+#             images_inserted = 0
             
-            # Insert images at strategic points
-            for i, section in enumerate(sections):
-                enhanced_sections.append(section)
+#             # Insert images at strategic points
+#             for i, section in enumerate(sections):
+#                 enhanced_sections.append(section)
                 
-                # Insert an image every few sections if we have images left
-                if (images_inserted < len(images_data) and 
-                    i > 0 and 
-                    (i % max(1, len(sections) // len(images_data)) == 0)):
+#                 # Insert an image every few sections if we have images left
+#                 if (images_inserted < len(images_data) and 
+#                     i > 0 and 
+#                     (i % max(1, len(sections) // len(images_data)) == 0)):
                     
-                    img_data = images_data[images_inserted]
-                    image_section = f"\n{img_data['position_marker']}\nImage Description: {img_data['description']}\n"
-                    enhanced_sections.append(image_section)
-                    images_inserted += 1
-                    logger.info(f"Inserted image {images_inserted}: {img_data['filename']}")
+#                     img_data = images_data[images_inserted]
+#                     image_section = f"\n{img_data['position_marker']}\nImage Description: {img_data['description']}\n"
+#                     enhanced_sections.append(image_section)
+#                     images_inserted += 1
+#                     logger.info(f"Inserted image {images_inserted}: {img_data['filename']}")
             
-            # Add any remaining images at the end
-            while images_inserted < len(images_data):
-                img_data = images_data[images_inserted]
-                image_section = f"\n{img_data['position_marker']}\nImage Description: {img_data['description']}\n"
-                enhanced_sections.append(image_section)
-                images_inserted += 1
-                logger.info(f"Added remaining image {images_inserted}: {img_data['filename']}")
+#             # Add any remaining images at the end
+#             while images_inserted < len(images_data):
+#                 img_data = images_data[images_inserted]
+#                 image_section = f"\n{img_data['position_marker']}\nImage Description: {img_data['description']}\n"
+#                 enhanced_sections.append(image_section)
+#                 images_inserted += 1
+#                 logger.info(f"Added remaining image {images_inserted}: {img_data['filename']}")
             
-            content = separator.join(enhanced_sections)
+#             content = separator.join(enhanced_sections)
         
-        logger.info(f"Final content length after image integration: {len(content)} characters")
+#         logger.info(f"Final content length after image integration: {len(content)} characters")
         
-        # Log a sample of the final content for debugging
-        sample_content = content[:500] + "..." if len(content) > 500 else content
-        logger.info(f"Sample final content: {sample_content}")
+#         # Log a sample of the final content for debugging
+#         sample_content = content[:500] + "..." if len(content) > 500 else content
+#         logger.info(f"Sample final content: {sample_content}")
 
-    return {
-        "content": content,
-        "images_data": images_data,
-        "file_type": file_extension
-    }
+#     return {
+#         "content": content,
+#         "images_data": images_data,
+#         "file_type": file_extension
+#     }
 
 def smart_chunk_with_context(content: str, images_data: List[Dict], chunk_size: int = 1000, overlap: int = 200) -> List[Dict]:
     """Enhanced chunking that preserves image context and references"""
@@ -774,21 +772,21 @@ def smart_chunk_with_context(content: str, images_data: List[Dict], chunk_size: 
     logger.info(f"Created {len(chunks)} chunks total")
     return chunks
 
-def debug_content_and_images(content: str, images_data: List[Dict]):
-    """Debug helper to show content and image integration"""
-    logger.info("=== CONTENT AND IMAGE INTEGRATION DEBUG ===")
-    logger.info(f"Content length: {len(content)} characters")
-    logger.info(f"Number of images: {len(images_data)}")
+# def debug_content_and_images(content: str, images_data: List[Dict]):
+#     """Debug helper to show content and image integration"""
+#     logger.info("=== CONTENT AND IMAGE INTEGRATION DEBUG ===")
+#     logger.info(f"Content length: {len(content)} characters")
+#     logger.info(f"Number of images: {len(images_data)}")
     
-    for i, img_data in enumerate(images_data):
-        marker = img_data['position_marker']
-        pos = content.find(marker)
-        logger.info(f"Image {i+1}: {img_data['filename']} -> Marker: {marker} -> Position: {pos}")
+#     for i, img_data in enumerate(images_data):
+#         marker = img_data['position_marker']
+#         pos = content.find(marker)
+#         logger.info(f"Image {i+1}: {img_data['filename']} -> Marker: {marker} -> Position: {pos}")
     
-    # Show first 1000 characters of content
-    sample = content[:1000] + "..." if len(content) > 1000 else content
-    logger.info(f"Content sample: {sample}")
-    logger.info("=== END DEBUG ===")
+#     # Show first 1000 characters of content
+#     sample = content[:1000] + "..." if len(content) > 1000 else content
+#     logger.info(f"Content sample: {sample}")
+#     logger.info("=== END DEBUG ===")
     
 def create_combined_description(all_descriptions: dict, filename: str) -> str:
     """Create a comprehensive description combining all vision model outputs"""
@@ -968,130 +966,127 @@ def process_document_with_context_multi_model(file_content: bytes,
         "file_type": file_extension
     }
     
-def process_document_with_context(file_content: bytes, filename: str, temp_dir: str, doc_id: str, openai_api_key: str = None) -> Dict:
-    """Process document maintaining context and storing images and their descriptions using MarkItDown"""
+# def process_document_with_context(file_content: bytes, filename: str, temp_dir: str, doc_id: str, openai_api_key: str = None) -> Dict:
+#     """Process document maintaining context and storing images and their descriptions using MarkItDown"""
 
-    file_extension = Path(filename).suffix.lower()
-    images_data = []
+#     file_extension = Path(filename).suffix.lower()
+#     images_data = []
 
-    # --- Step 1: Extract images from file ---
-    if file_extension == '.pdf':
-        pages_data = extract_and_store_images_from_file(file_content, filename, temp_dir, doc_id)
+#     # --- Step 1: Extract images from file ---
+#     if file_extension == '.pdf':
+#         pages_data = extract_and_store_images_from_file(file_content, filename, temp_dir, doc_id)
 
-        # --- Step 2: Generate descriptions with MarkItDown ---
-        pages_data = describe_images_for_pages(pages_data, openai_api_key)
+#         # --- Step 2: Generate descriptions with MarkItDown ---
+#         pages_data = describe_images_for_pages(pages_data, openai_api_key)
 
-        # --- Step 3: Flatten all image data ---
-        for page in pages_data:
-            for img_path, desc in zip(page["images"], page.get("image_descriptions", [])):
-                images_data.append({
-                    "filename": Path(img_path).name,
-                    "storage_path": img_path,
-                    "description": desc,
-                    "position_marker": f"[IMAGE:{Path(img_path).name}]",
-                    "page": page["page"]
-                })
+#         # --- Step 3: Flatten all image data ---
+#         for page in pages_data:
+#             for img_path, desc in zip(page["images"], page.get("image_descriptions", [])):
+#                 images_data.append({
+#                     "filename": Path(img_path).name,
+#                     "storage_path": img_path,
+#                     "description": desc,
+#                     "position_marker": f"[IMAGE:{Path(img_path).name}]",
+#                     "page": page["page"]
+#                 })
 
-    # --- Step 4: Save the original file ---
-    temp_file_path = os.path.join(temp_dir, filename)
-    with open(temp_file_path, 'wb') as f:
-        f.write(file_content)
+#     # --- Step 4: Save the original file ---
+#     temp_file_path = os.path.join(temp_dir, filename)
+#     with open(temp_file_path, 'wb') as f:
+#         f.write(file_content)
 
-    # --- Step 5: Run MarkItDown on entire document ---
-    try:
-        md_instance = get_markitdown_instance(openai_api_key)
-        result = md_instance.convert(temp_file_path)
-        content = result.text_content if hasattr(result, 'text_content') else str(result)
-        logger.info(f"MarkItDown extracted content length: {len(content)} characters")
-    except Exception as e:
-        logger.error(f"MarkItDown processing failed for {filename}: {e}")
-        if file_extension == '.txt':
-            content = file_content.decode('utf-8', errors='ignore')
-        else:
-            # If MarkItDown fails, create basic content structure
-            content = f"Document: {filename}\n\nContent could not be extracted via MarkItDown."
+#     # --- Step 5: Run MarkItDown on entire document ---
+#     try:
+#         md_instance = get_markitdown_instance(openai_api_key)
+#         result = md_instance.convert(temp_file_path)
+#         content = result.text_content if hasattr(result, 'text_content') else str(result)
+#         logger.info(f"MarkItDown extracted content length: {len(content)} characters")
+#     except Exception as e:
+#         logger.error(f"MarkItDown processing failed for {filename}: {e}")
+#         if file_extension == '.txt':
+#             content = file_content.decode('utf-8', errors='ignore')
+#         else:
+#             # If MarkItDown fails, create basic content structure
+#             content = f"Document: {filename}\n\nContent could not be extracted via MarkItDown."
 
-    # --- Step 6: Enhanced image integration strategy ---
-    if images_data:
-        logger.info(f"Integrating {len(images_data)} images into document content")
+#     # --- Step 6: Enhanced image integration strategy ---
+#     if images_data:
+#         logger.info(f"Integrating {len(images_data)} images into document content")
         
-        # Strategy 1: If content is very short or empty, create a structured document
-        if len(content.strip()) < 50:
-            logger.info("Content is minimal, creating structured document with images")
-            enhanced_content = [f"Document: {filename}\n"]
+#         # Strategy 1: If content is very short or empty, create a structured document
+#         if len(content.strip()) < 50:
+#             logger.info("Content is minimal, creating structured document with images")
+#             enhanced_content = [f"Document: {filename}\n"]
             
-            # Group images by page
-            pages_with_images = {}
-            for img_data in images_data:
-                page_num = img_data.get("page", 1)
-                if page_num not in pages_with_images:
-                    pages_with_images[page_num] = []
-                pages_with_images[page_num].append(img_data)
+#             # Group images by page
+#             pages_with_images = {}
+#             for img_data in images_data:
+#                 page_num = img_data.get("page", 1)
+#                 if page_num not in pages_with_images:
+#                     pages_with_images[page_num] = []
+#                 pages_with_images[page_num].append(img_data)
             
-            # Add each page with its images
-            for page_num in sorted(pages_with_images.keys()):
-                enhanced_content.append(f"\n--- Page {page_num} ---\n")
-                for img_data in pages_with_images[page_num]:
-                    enhanced_content.append(f"{img_data['position_marker']}")
-                    enhanced_content.append(f"Image Description: {img_data['description']}\n")
+#             # Add each page with its images
+#             for page_num in sorted(pages_with_images.keys()):
+#                 enhanced_content.append(f"\n--- Page {page_num} ---\n")
+#                 for img_data in pages_with_images[page_num]:
+#                     enhanced_content.append(f"{img_data['position_marker']}")
+#                     enhanced_content.append(f"Image Description: {img_data['description']}\n")
             
-            content = "\n".join(enhanced_content)
+#             content = "\n".join(enhanced_content)
         
-        else:
-            # Strategy 2: Insert images into existing content
-            logger.info("Inserting images into existing content")
+#         else:
+#             # Strategy 2: Insert images into existing content
+#             logger.info("Inserting images into existing content")
             
-            # Split content into sections (paragraphs or lines)
-            if '\n\n' in content:
-                sections = content.split('\n\n')
-                separator = '\n\n'
-            else:
-                sections = content.split('\n')
-                separator = '\n'
+#             # Split content into sections (paragraphs or lines)
+#             if '\n\n' in content:
+#                 sections = content.split('\n\n')
+#                 separator = '\n\n'
+#             else:
+#                 sections = content.split('\n')
+#                 separator = '\n'
             
-            enhanced_sections = []
-            images_inserted = 0
+#             enhanced_sections = []
+#             images_inserted = 0
             
-            # Insert images at strategic points
-            for i, section in enumerate(sections):
-                enhanced_sections.append(section)
+#             # Insert images at strategic points
+#             for i, section in enumerate(sections):
+#                 enhanced_sections.append(section)
                 
-                # Insert an image every few sections if we have images left
-                if (images_inserted < len(images_data) and 
-                    i > 0 and 
-                    (i % max(1, len(sections) // len(images_data)) == 0)):
+#                 # Insert an image every few sections if we have images left
+#                 if (images_inserted < len(images_data) and 
+#                     i > 0 and 
+#                     (i % max(1, len(sections) // len(images_data)) == 0)):
                     
-                    img_data = images_data[images_inserted]
-                    image_section = f"\n{img_data['position_marker']}\nImage Description: {img_data['description']}\n"
-                    enhanced_sections.append(image_section)
-                    images_inserted += 1
-                    logger.info(f"Inserted image {images_inserted}: {img_data['filename']}")
+#                     img_data = images_data[images_inserted]
+#                     image_section = f"\n{img_data['position_marker']}\nImage Description: {img_data['description']}\n"
+#                     enhanced_sections.append(image_section)
+#                     images_inserted += 1
+#                     logger.info(f"Inserted image {images_inserted}: {img_data['filename']}")
             
-            # Add any remaining images at the end
-            while images_inserted < len(images_data):
-                img_data = images_data[images_inserted]
-                image_section = f"\n{img_data['position_marker']}\nImage Description: {img_data['description']}\n"
-                enhanced_sections.append(image_section)
-                images_inserted += 1
-                logger.info(f"Added remaining image {images_inserted}: {img_data['filename']}")
+#             # Add any remaining images at the end
+#             while images_inserted < len(images_data):
+#                 img_data = images_data[images_inserted]
+#                 image_section = f"\n{img_data['position_marker']}\nImage Description: {img_data['description']}\n"
+#                 enhanced_sections.append(image_section)
+#                 images_inserted += 1
+#                 logger.info(f"Added remaining image {images_inserted}: {img_data['filename']}")
             
-            content = separator.join(enhanced_sections)
+#             content = separator.join(enhanced_sections)
         
-        logger.info(f"Final content length after image integration: {len(content)} characters")
+#         logger.info(f"Final content length after image integration: {len(content)} characters")
         
-        # Log a sample of the final content for debugging
-        sample_content = content[:500] + "..." if len(content) > 500 else content
-        logger.info(f"Sample final content: {sample_content}")
+#         # Log a sample of the final content for debugging
+#         sample_content = content[:500] + "..." if len(content) > 500 else content
+#         logger.info(f"Sample final content: {sample_content}")
 
-    return {
-        "content": content,
-        "images_data": images_data,
-        "file_type": file_extension
-    }
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import os
-import tempfile
-import asyncio
+#     return {
+#         "content": content,
+#         "images_data": images_data,
+#         "file_type": file_extension
+#     }
+
 
 def run_ingest_job(
     job_id: str,
@@ -1101,14 +1096,22 @@ def run_ingest_job(
     chunk_overlap: int,
     store_images: bool,
     model_name: str,
-    debug_mode: bool,
     vision_models: List[str],
     openai_api_key: Optional[str],
 ):
-    jobs[job_id] = "running"
+    # initialize a hash: status + zeroed counters
+    progress_key = f"job:{job_id}:progress"
+    # jobs[job_id] = "running"
+    redis_client.set(job_id, "running")
+
+    # initialize the hash strictly on the “progress” key
+    redis_client.hset(progress_key, mapping={
+        "total_chunks":     0,
+        "processed_chunks": 0
+    })
 
     # decide thread-pool size
-    max_workers = min(2, os.cpu_count() or 1)
+    max_workers = min(4, os.cpu_count() or 1)
 
     def get_chromadb_collection():
         # each thread gets its own client/collection
@@ -1119,11 +1122,26 @@ def run_ingest_job(
     def process_one(item):
         fname = item["filename"]
         content = item["content"]
-        document_id =  uuid.uuid4().hex
+        document_id =  uuid.uuid4().hex 
 
+        ext = Path(fname).suffix.lower()
         # 1) extract images
         with tempfile.TemporaryDirectory() as tmp_dir:
-            pages_data = extract_and_store_images_from_file(content, fname, tmp_dir, fname)
+            if ext == ".pdf":
+                pages_data = extract_and_store_images_from_file(content, fname, tmp_dir, fname)
+
+            elif ext == ".docx":
+                pages_data = extract_images_from_docx(content, fname, tmp_dir, fname)
+
+            elif ext == ".xlsx":
+                pages_data = extract_images_from_xlsx(content, fname, tmp_dir, fname)
+
+            elif ext in (".html", ".htm"):
+                pages_data = extract_images_from_html(content, fname, tmp_dir, fname)
+
+            else:
+                # txt, csv, pptx, etc → no images
+                pages_data = [{"page": 1, "images": [], "text": None}]
 
             # 2) describe images
             pages_data = asyncio.new_event_loop().run_until_complete(
@@ -1149,39 +1167,49 @@ def run_ingest_job(
             )
 
             # 4) chunk → embed → insert
-            chunks = smart_chunk_with_context(
-                doc_data["content"], doc_data["images_data"], chunk_size, chunk_overlap
-            )
-            texts = [c["content"] for c in chunks]
-            ids   = [f"{fname}_chunk_{c['chunk_index']}" for c in chunks]
+            chunks = smart_chunk_with_context(doc_data["content"],
+                                          doc_data["images_data"],
+                                          chunk_size, chunk_overlap)
 
-            # build scalar‐only metadata, JSON‐dump any lists
-            metas = []
+            # bump our total_chunks counter by however many we're about to insert
+            redis_client.hincrby(progress_key, "total_chunks", len(chunks))
+            coll = get_chromadb_collection()
+            
             for c in chunks:
+                text = c["content"]
+                # build metadata dict for this chunk:
                 meta = {
                     "document_id": document_id,
                     "document_name": fname,
                     "file_type": doc_data["file_type"],
                     "chunk_index": c["chunk_index"],
-                    "total_chunks":  len(chunks),
+                    "total_chunks": len(chunks),
                     "has_images": c["has_images"],
                     "image_count": len(c["images"]),
                     "start_position": c["start_position"],
                     "end_position": c["end_position"],
                     "images_stored": store_images,
+                    "timestamp": datetime.datetime.now().isoformat(),
                 }
-                if c["images"]:
-                    meta["image_filenames"]            = json.dumps([i["filename"]    for i in c["images"]])
-                    meta["image_descriptions"]         = json.dumps([i["description"] for i in c["images"]])
-                    meta["image_storage_paths"]        = json.dumps([i["storage_path"] for i in c["images"]])
-                metas.append(meta)
+                
+                filenames = [img["filename"] for img in c["images"]]
+                paths     = [img["storage_path"] for img in c["images"]]
+                descs     = [img["description"] for img in c["images"]]
 
-            embeddings = embedding_model.encode(texts, convert_to_numpy=True).tolist()
-
-            # insert into fresh collection handle
-            coll = get_chromadb_collection()
-            coll.add(documents=texts, embeddings=embeddings, metadatas=metas, ids=ids)
-
+                meta["image_filenames"]     = json.dumps(filenames)
+                meta["image_storage_paths"] = json.dumps(paths)
+                meta["image_descriptions"]  = json.dumps(descs)
+                # embed one chunk at a time
+                emb = embedding_model.encode([text], 
+                                            convert_to_numpy=True, 
+                                            batch_size=1).tolist()
+                coll.add(documents=[text],
+                        embeddings=emb,
+                        metadatas=[meta],
+                        ids=[f"{fname}_chunk_{c['chunk_index']}"]
+                )
+                redis_client.hincrby(progress_key, "processed_chunks", 1)
+                logger.info(f"[{job_id}] Ingested chunk {c['chunk_index']} for {fname} with {len(c['images'])} images")
         return fname
 
     # launch threads
@@ -1195,10 +1223,69 @@ def run_ingest_job(
             except Exception as e:
                 logger.error(f"[{job_id}] Error ingesting {fname}: {e!r}")
 
-    jobs[job_id] = "success"
+    # jobs[job_id] = "success"
+    # redis_client.set(job_id, "success")
+    redis_client.set(job_id, "success")
 
+def extract_images_from_docx(file_content: bytes, filename: str, temp_dir: str, doc_id: str):
+    docx_path = os.path.join(temp_dir, filename)
+    with open(docx_path, "wb") as f:
+        f.write(file_content)
 
+    pages_data = [{"page": 1, "images": [], "text": None}]
+    with ZipFile(docx_path) as z:
+        for member in z.namelist():
+            if member.startswith("word/media/"):
+                data = z.read(member)
+                ext  = Path(member).suffix
+                name = f"{doc_id}_{Path(member).name}"
+                out  = os.path.join(IMAGES_DIR, name)
+                with open(out, "wb") as imgf:
+                    imgf.write(data)
+                pages_data[0]["images"].append(out)
+    return pages_data
 
+def extract_images_from_xlsx(file_content: bytes, filename: str, temp_dir: str, doc_id: str):
+    xlsx_path = os.path.join(temp_dir, filename)
+    with open(xlsx_path, "wb") as f:
+        f.write(file_content)
+    
+    pages_data = [{"page": 1, "images": [], "text": None}] 
+    
+    with ZipFile(xlsx_path) as z:
+        for m in z.namelist():
+            if m.startswith("xl/media/"):
+                data = z.read(m)
+                ext  = Path(m).suffi
+                name = f"{doc_id}_{Path(m).name}"
+                out  = os.path.join(IMAGES_DIR, name)
+                with open(out, "wb") as imgf:
+                    imgf.write(data)
+                pages_data[0]["images"].append(out)
+    return pages_data
+
+def extract_images_from_html(html_bytes, filename, temp_dir, doc_id):
+    html = html_bytes.decode("utf8", errors="ignore")
+    soup = BeautifulSoup(html, "html.parser")
+    pages = [{"page":1, "images":[], "text": soup.get_text()}]
+    for i, img in enumerate(soup.find_all("img"),1):
+        src = img.get("src","")
+        if src.startswith("data:image/"):
+            header, b64 = src.split(",",1)
+            ext = header.split(";")[0].split("/")[1]
+            name = f"{doc_id}_{i}.{ext}"
+            out  = os.path.join(IMAGES_DIR, name)
+            with open(out,"wb") as f: f.write(base64.b64decode(b64))
+        elif src.startswith("http"):
+            resp = requests.get(src, timeout=10)
+            ext  = Path(src).suffix or ".jpg"
+            name = f"{doc_id}_{i}{ext}"
+            out  = os.path.join(IMAGES_DIR, name)
+            with open(out,"wb") as f: f.write(resp.content)
+        else:
+            continue
+        pages[0]["images"].append(out)
+    return pages
 
 ### -------------------------------------------------------------------------- ###
 ### Collection Endpoints ###
@@ -1575,7 +1662,6 @@ async def upload_and_process_documents(
     chunk_overlap: int = Query(200),
     store_images: bool = Query(True),
     model_name: str = Query("none"),
-    debug_mode: bool = Query(False),
     vision_models: str = Query(""),
     request: Request = None,
 ):
@@ -1585,7 +1671,8 @@ async def upload_and_process_documents(
 
     # 2) Generate a single job_id
     job_id = uuid.uuid4().hex
-    jobs[job_id] = "pending"
+    # jobs[job_id] = "pending"
+    redis_client.set(job_id, "pending")
 
     # 3) Slurp each UploadFile into memory so we can hand off raw bytes
     payloads: List[Dict[str,Any]] = []
@@ -1604,7 +1691,6 @@ async def upload_and_process_documents(
         chunk_overlap,
         store_images,
         model_name,
-        debug_mode,
         selected_models,
         request.headers.get("X-OpenAI-API-Key") or open_ai_api_key,
     )
@@ -1729,10 +1815,19 @@ def get_stored_image(image_filename: str):
     
 @app.get("/jobs/{job_id}")
 def get_job_status(job_id: str):
-    status = jobs.get(job_id)
-    if status is None:
-        raise HTTPException(404, f"Job {job_id} not found")
-    return {"job_id": job_id, "status": status}
+    # status = jobs.get(job_id)
+    # if status is None:
+    #     raise HTTPException(404, f"Job {job_id} not found")
+    # return {"job_id": job_id, "status": status}
+    
+    status = redis_client.get(job_id)
+    prog   = redis_client.hgetall(f"job:{job_id}:progress") or {}
+    return {
+        "job_id": job_id,
+        "status": status,
+        "total_chunks":     int(prog.get("total_chunks",     0)),
+        "processed_chunks": int(prog.get("processed_chunks", 0)),
+    }
 
 ### Run with Uvicorn if called directly ###
 if __name__ == "__main__":

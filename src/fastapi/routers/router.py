@@ -22,6 +22,9 @@ from schemas.database_schema import (
     UpdateAgentResponse
 )
 from langchain_core.messages import HumanMessage
+from starlette.concurrency import run_in_threadpool
+import logging
+logger = logging.getLogger("FASTAPI_ROUTER")
 
 router = APIRouter()
 
@@ -747,23 +750,27 @@ doc_service = DocumentService(
     agent_api_url=os.getenv("FASTAPI_URL", "http://localhost:9020")
 )
 
+
 class GenerateRequest(BaseModel):
-    template_collection: str
-    source_collections: Optional[List[str]] = None
-    agent_ids: List[int]
-    use_rag: bool = True
-    top_k: int = 5
+    template_collection:  str
+    template_doc_ids:     Optional[List[str]] = None
+    source_collections:   Optional[List[str]] = None
+    source_doc_ids:       Optional[List[str]] = None
+    agent_ids:            List[int]
+    use_rag:              bool               = True
+    top_k:                int                = 5
 
 @router.post("/generate_documents")
 async def generate_documents(req: GenerateRequest):
-    try:
-        docs = doc_service.generate_documents(
-            template_collection=req.template_collection,
-            source_collections=req.source_collections or [],
-            agent_ids=req.agent_ids,
-            use_rag=req.use_rag,
-            top_k=req.top_k
-        )
-        return {"documents": docs}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    logger.info("Received /generate_documents ⇒ %s", req)
+    docs = await run_in_threadpool(
+        doc_service.generate_documents,
+        req.template_collection,
+        req.template_doc_ids,
+        req.source_collections,
+        req.source_doc_ids,
+        req.agent_ids,
+        req.use_rag,
+        req.top_k,
+    )
+    return {"documents": docs}

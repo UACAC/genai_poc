@@ -19,4 +19,4 @@ async def root():
     return {"message": "Welcome to the LLM Chatbot!"}
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=9020, reload=False)
+    uvicorn.run("main:app", host="0.0.0.0", port=9020, workers=4, reload=True)

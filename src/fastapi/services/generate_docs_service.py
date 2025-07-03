@@ -52,42 +52,68 @@ class DocumentService:
             payload.update(data_sample=prompt)
             url = f"{self.agent_api}/compliance-check"
             result = requests.post(url, json=payload).json()
-            # Compliance returns {"details": {idx: {...}}}
-            first = result["details"][0] if isinstance(result["details"], list) else next(result["details"].values())
+
+            details = result.get("details", {})
+            if isinstance(details, list):
+                first = details[0]
+            elif isinstance(details, dict):
+                # turn the dict_values into an iterator
+                first = next(iter(details.values()))
+            else:
+                raise ValueError(f"Unexpected details format: {type(details)}")
+
             return first["reason"]
+
 
     def generate_documents(
         self,
         template_collection: str,
-        source_collections: Optional[List[str]],
-        agent_ids: List[int],
-        use_rag: bool = True,
-        top_k: int = 5
+        template_doc_ids:    Optional[List[str]] = None,
+        source_collections:  Optional[List[str]] = None,
+        source_doc_ids:      Optional[List[str]] = None,
+        agent_ids:           List[int]             = [],
+        use_rag:             bool                  = True,
+        top_k:               int                   = 5,
     ) -> List[dict]:
-        templates = self._fetch_templates(template_collection)
-        out = []
+        # 1) load templates by ID or by collection
+        if template_doc_ids:
+            templates = []
+            for tid in template_doc_ids:
+                resp = requests.get(
+                    f"{self.chroma_url}/documents/reconstruct/{tid}",
+                    params={"collection_name": template_collection}
+                )
+                resp.raise_for_status()
+                templates.append(resp.json()["reconstructed_content"])
+        else:
+            templates = self._fetch_templates(template_collection)
 
+        out = []
         for i, tmpl in enumerate(templates):
-            # 1) build the final prompt
+            # build prompt
             if use_rag and source_collections:
                 ctx = self._retrieve_context(tmpl, source_collections, top_k)
                 prompt = tmpl.replace("{context}", ctx) if "{context}" in tmpl else f"{tmpl}\n\nContext:\n{ctx}"
             else:
                 prompt = tmpl
 
-            # 2) call each agent
+            # invoke each agent
             for aid in agent_ids:
-                analysis = self._invoke_agent(prompt, aid, use_rag, source_collections[0] if source_collections else None)
+                analysis = self._invoke_agent(
+                    prompt,
+                    aid,
+                    use_rag,
+                    (source_collections or [None])[0]
+                )
 
-                # 3) build an in-memory DOCX
+                # wrap into DOCX + base64
                 doc = Document()
                 title = f"tmpl_{i}_agt_{aid}"
                 doc.add_heading(title, level=1)
                 doc.add_paragraph(analysis)
                 buf = io.BytesIO()
                 doc.save(buf)
-                b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
-
+                b64 = base64.b64encode(buf.getvalue()).decode()
                 out.append({"title": title, "docx_b64": b64})
 
         return out

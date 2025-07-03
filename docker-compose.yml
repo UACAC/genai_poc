@@ -26,6 +26,8 @@ services:
       context: ./src/chromadb
       dockerfile: Dockerfile.chromadb
     container_name: chromadb
+    mem_limit: 2g
+    restart: unless-stopped
     ports:
       - "8020:8020"
     environment:
@@ -34,6 +36,7 @@ services:
       - OLLAMA_URL=http://ollama:11434
       - OLLAMA_VISION_MODEL=llava
       - HUGGINGFACE_VISION_MODEL=Salesforce/blip-image-captioning-base
+      - REDIS_URL=redis://redis:6379/0
     env_file:
       - .env
     depends_on:
@@ -105,6 +108,17 @@ services:
     networks:
       - ai_network
 
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - ai_network
+
 networks:
   ai_network:
     driver: bridge
@@ -114,3 +128,4 @@ volumes:
   chromadata:
   ollama_models:
   huggingface_cache:
+  redis-data:
