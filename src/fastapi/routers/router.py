@@ -746,6 +746,7 @@ async def get_session_analytics(days: int = 7, db: Session = Depends(get_db)):
 doc_service = DocumentService(
     rag_service=rag_service,
     agent_service=agent_service,
+    llm_service=llm_service,
     chroma_url=os.getenv("CHROMA_URL", "http://localhost:8020"),
     agent_api_url=os.getenv("FASTAPI_URL", "http://localhost:9020")
 )

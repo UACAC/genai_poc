@@ -235,7 +235,7 @@ class LLMService:
             "models": {},
             "timestamp": time.time()
         }
-        
+        l
         try:
             # Test ChromaDB connection
             test_db = Chroma(

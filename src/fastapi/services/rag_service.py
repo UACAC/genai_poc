@@ -153,7 +153,7 @@ class RAGService:
             
             # Check if collection has documents
             doc_count = len(docs_data.get("documents", []))
-            print(f"📊 Collection '{collection_name}' has {doc_count} documents")
+            print(f"Collection '{collection_name}' has {doc_count} documents")
             
             if doc_count == 0:
                 print(f"No documents in collection")

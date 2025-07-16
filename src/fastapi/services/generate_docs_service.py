@@ -1,22 +1,27 @@
 # services/document_service.py
 import io
+import uuid
 import base64
 import requests
 from typing import List, Optional
 from docx import Document
 from services.rag_service import RAGService
 from services.agent_service import AgentService
+from services.llm_service import LLMService
+from services.database import SessionLocal, ComplianceAgent
 
 class DocumentService:
     def __init__(
         self,
         rag_service: RAGService,
         agent_service: AgentService,
+        llm_service: LLMService,
         chroma_url: str,
         agent_api_url: str,
     ):
         self.rag = rag_service
         self.agent = agent_service
+        self.llm = llm_service
         self.chroma_url = chroma_url.rstrip("/")
         self.agent_api = agent_api_url.rstrip("/")
 
@@ -38,82 +43,109 @@ class DocumentService:
         self,
         prompt: str,
         agent_id: int,
-        use_rag: bool,
-        collection: Optional[str]
-    ) -> str:
-        payload = {"agent_ids": [agent_id]}
-        if use_rag:
-            payload.update(query_text=prompt, collection_name=collection)
-            url = f"{self.agent_api}/rag-check"
-            result = requests.post(url, json=payload).json()
-            # RAG returns {"agent_responses": {agent_name: response,...}}
-            return next(iter(result["agent_responses"].values()))
-        else:
-            payload.update(data_sample=prompt)
-            url = f"{self.agent_api}/compliance-check"
-            result = requests.post(url, json=payload).json()
+        collection: str,
+        ) -> str:
+        """
+        Use your LLMService.query_model to do a RAG-enabled completion.
+        We assume that in your DB you can look up the ComplianceAgent
+        to get its `model_name` (e.g. "gpt-4").
+        """
+        # load the agent metadata so we know which model to call
+        # (you can cache this lookup if you want)
+        
+        session = SessionLocal()
+        try:
+            agent = session.query(ComplianceAgent).get(agent_id)
+            model_name = agent.model_name.lower()
+        finally:
+            session.close()
 
-            details = result.get("details", {})
-            if isinstance(details, list):
-                first = details[0]
-            elif isinstance(details, dict):
-                # turn the dict_values into an iterator
-                first = next(iter(details.values()))
-            else:
-                raise ValueError(f"Unexpected details format: {type(details)}")
-
-            return first["reason"]
+        # ask your LLMService to do RAG over `collection` + `prompt`
+        answer, _ = self.llm.query_model(
+            model_name=model_name,
+            query=prompt,
+            collection_name=collection,
+            query_type="rag",
+        )
+        return answer
 
 
     def generate_documents(
         self,
         template_collection: str,
-        template_doc_ids:    Optional[List[str]] = None,
-        source_collections:  Optional[List[str]] = None,
-        source_doc_ids:      Optional[List[str]] = None,
-        agent_ids:           List[int]             = [],
-        use_rag:             bool                  = True,
-        top_k:               int                   = 5,
+        template_doc_ids:    Optional[List[str]]    = None,
+        source_collections:  Optional[List[str]]    = None,
+        source_doc_ids:      Optional[List[str]]    = None,
+        agent_ids:           List[int]              = [],
+        use_rag:             bool                   = True,
+        top_k:               int                    = 5,
     ) -> List[dict]:
-        # 1) load templates by ID or by collection
-        if template_doc_ids:
-            templates = []
+        # --- 1) RAG‐retrieve template skeletons ---
+        templates = []
+        if use_rag and template_doc_ids:
             for tid in template_doc_ids:
-                resp = requests.get(
-                    f"{self.chroma_url}/documents/reconstruct/{tid}",
-                    params={"collection_name": template_collection}
-                )
-                resp.raise_for_status()
-                templates.append(resp.json()["reconstructed_content"])
+                docs, ok = self.rag.get_relevant_documents(tid, template_collection)
+                if ok:
+                    templates.append("\n\n".join(docs[:top_k]))
         else:
             templates = self._fetch_templates(template_collection)
 
+        # --- 2) RAG‐retrieve source requirements ---
+        sources = []
+        if use_rag and source_collections and source_doc_ids:
+            for coll, sid in zip(source_collections, source_doc_ids):
+                docs, ok = self.rag.get_relevant_documents(sid, coll)
+                if ok:
+                    sources.append("\n\n".join(docs[:top_k]))
+
         out = []
         for i, tmpl in enumerate(templates):
-            # build prompt
-            if use_rag and source_collections:
-                ctx = self._retrieve_context(tmpl, source_collections, top_k)
-                prompt = tmpl.replace("{context}", ctx) if "{context}" in tmpl else f"{tmpl}\n\nContext:\n{ctx}"
-            else:
-                prompt = tmpl
+            # --- 3) Build the prompt ---
+            prompt = "\n\n".join(filter(None, [
+                "TEMPLATE SKELETON:",
+                tmpl,
+                "SOURCE REQUIREMENTS:",
+                "\n\n".join(sources),
+                "Please fill out the above template using the source requirements and produce a complete test plan."
+            ]))
 
-            # invoke each agent
+            # --- 4) For each agent, invoke exactly one RAG→LLM chain ---
+            # we'll collect all outputs in turn; you could also just pick one agent.
+            analyses = []
+            # make sure we load all agents just once per call
+            self.agent.load_selected_compliance_agents(agent_ids)
+
             for aid in agent_ids:
-                analysis = self._invoke_agent(
-                    prompt,
-                    aid,
-                    use_rag,
-                    (source_collections or [None])[0]
-                )
+                # pick the matching metadata dict
+                agent_meta = next(a for a in self.agent.compliance_agents if a["id"] == aid)
 
-                # wrap into DOCX + base64
-                doc = Document()
-                title = f"tmpl_{i}_agt_{aid}"
-                doc.add_heading(title, level=1)
-                doc.add_paragraph(analysis)
-                buf = io.BytesIO()
-                doc.save(buf)
-                b64 = base64.b64encode(buf.getvalue()).decode()
-                out.append({"title": title, "docx_b64": b64})
+                # invoke the unified direct-LLM path (which uses that agent's system+user prompts)
+                db = SessionLocal()
+                try:
+                    result = self.agent._invoke_chain(
+                        agent=agent_meta,
+                        data_sample=prompt,
+                        session_id=str(uuid.uuid4()),
+                        db=db
+                    )
+                    analyses.append(result["reason"])
+                finally:
+                    db.close()
+
+            # join multiple agent outputs if you like, or just pick the first
+            analysis = "\n\n---\n\n".join(analyses)
+
+            # --- 5) Pack into a DOCX ---
+            doc = Document()
+            title = f"tmpl_{i}"
+            doc.add_heading(title, level=1)
+            doc.add_paragraph(analysis)
+            buf = io.BytesIO()
+            doc.save(buf)
+            out.append({
+                "title":   title,
+                "docx_b64": base64.b64encode(buf.getvalue()).decode("utf-8")
+            })
 
         return out
+

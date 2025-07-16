@@ -1971,7 +1971,7 @@ elif chat_mode == "Session History":
 elif chat_mode == "Document Generator":
     st.markdown("---")
     st.header("Document Generator")
-    st.info("Create rule development agents, upload templates, and generate comprehensive documentation using AI analysis.")
+    st.info("Upload templates, and generate comprehensive documentation using AI analysis.")
     
     # Document Generator sub-modes
     doc_gen_mode = st.radio(
@@ -2386,8 +2386,7 @@ elif chat_mode == "Document Generator":
             
             # Filter for rule development related agents
             rule_agents = [agent for agent in agents 
-                        if any(keyword in agent['name'].lower() 
-                                for keyword in ['rule', 'test', 'document', 'analysis', 'extract', 'synthesis', 'auto'])]
+            if any(keyword in agent['name'].lower() for keyword in ['rule', 'test', 'document', 'analysis', 'extract', 'synthesis', 'auto'])]
             
             if rule_agents:
                 st.subheader(f"Rule Development Agents ({len(rule_agents)} found)")
@@ -2482,8 +2481,8 @@ elif chat_mode == "Document Generator":
     # ----------------------------------------------------------------------
     # TEMPLATE MANAGEMENT SUB-MODE  
     # ----------------------------------------------------------------------
-
-    elif doc_gen_mode == "Template Management":
+    
+    if doc_gen_mode == "Template Management":
         st.header("Document Template Management")
         st.info("Upload and manage document templates for automated rule generation and test plan creation.")
         
@@ -2507,8 +2506,8 @@ elif chat_mode == "Document Generator":
         # 1) Pick agents
         # ——————————————————————————
         agents = st.session_state.get("available_rule_agents") or requests.get(f"{FASTAPI_API}/get-agents").json()["agents"]
-        rule_agents = [a for a in agents if "rule" in a["name"].lower()]
-        agent_map = {f"{a['name']} ({a['model_name']})": a["id"] for a in rule_agents}
+        # rule_agents = [a for a in agents if "rule" in a["name"].lower()]
+        agent_map = {f"{a['name']} ({a['model_name']})": a["id"] for a in agents}
         selected_agents = st.multiselect("Select Agents", list(agent_map.keys()), key="gen_agents")
         if not selected_agents:
             st.info("Choose at least one agent to proceed"); st.stop()
@@ -2567,8 +2566,8 @@ elif chat_mode == "Document Generator":
         # 5) Generate analyses
         # ——————————————————————————
         if st.button("Generate Documents", type="primary"):
-            if not template_doc_ids or not source_doc_ids or not agent_ids:
-                st.error("You must select at least one template, one source doc, and one agent.")
+            if not template_doc_ids or not source_doc_ids:
+                st.error("You must select at least one templated and one source doc.")
             else:
                 payload = {
                     "template_collection": template_collection,
@@ -2576,7 +2575,7 @@ elif chat_mode == "Document Generator":
                     "source_collections":  [source_collection],
                     "source_doc_ids":      source_doc_ids,
                     "agent_ids":           agent_ids,
-                    "use_rag":             False,
+                    "use_rag":             True,
                     "top_k":               5,
                 }
                 st.write("about to call /generate_documents on", FASTAPI_API)
@@ -2610,8 +2609,6 @@ elif chat_mode == "Document Generator":
                     except Exception as e:
                             st.error("Request exception: " + str(e))
 
-
-                    
         # ——————————————————————————
         # 6) Offer download once we have results
         # ——————————————————————————
