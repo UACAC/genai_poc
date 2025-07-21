@@ -560,8 +560,8 @@ elif chat_mode == "AI Agent Simulation":
         
         # Analysis content
         analysis_content = st.text_area(
-            "Legal Content for Agent Analysis", 
-            placeholder="Paste contract text, legal documents, or content for specialized analysis...",
+            "Content for Agent Analysis", 
+            placeholder="Paste contract text,documents, or content for analysis...",
             height=150
         )
         
@@ -705,8 +705,8 @@ elif chat_mode == "AI Agent Simulation":
         
         # Content and collection selection for debate
         debate_content = st.text_area(
-            "Legal Content for Multi-Agent Debate", 
-            placeholder="Enter the legal content that agents will debate about...",
+            "Content for Multi-Agent Debate", 
+            placeholder="Enter the content that agents will debate about...",
             height=120, 
             key="debate_content"
         )
@@ -856,13 +856,13 @@ elif chat_mode == "AI Agent Simulation":
 
     else:
         # No agents available
-        st.info("Click 'Refresh Agent List' to load your specialized legal agents")
+        st.info("Click 'Refresh Agent List' to load your specialized agents")
         st.markdown("""
         **No agents found!** 
         
         To use Agent Simulation mode:
         1. Go to the 'Create Agent' tab
-        2. Create some specialized legal agents
+        2. Create some specialized agents
         3. Come back here to simulate multi-agent analysis
         """)
 
@@ -1304,7 +1304,7 @@ elif chat_mode == "Create Agent":
     # MANAGE EXISTING AGENTS SUB-MODE
     # ----------------------------------------------------------------------
     elif agent_mode == "Manage Existing Agents":
-        st.subheader("Manage Existing Legal Agents")
+        st.subheader("Manage Existing Agents")
         
         # Load agents with enhanced error handling
         col1_load, col2_load = st.columns([1, 2])
@@ -1573,7 +1573,7 @@ elif chat_mode == "Create Agent":
 
         else:
             # Enhanced empty state
-            st.info("No agents found. Create your first legal agent in the 'Create New Agent' tab!")
+            st.info("No agents found. Create your first agent in the 'Create New Agent' tab!")
             
             # Quick start guide
             with st.expander("Quick Start Guide"):
@@ -1584,7 +1584,7 @@ elif chat_mode == "Create Agent":
                 2. **Choose a Template**: Select from predefined templates like 'Systems Engineer' or 'Quality Control Engineer'
                 3. **Configure Settings**: Adjust temperature (creativity) and max tokens (response length)
                 4. **Test Configuration**: Use the test button to preview how your agent will work
-                5. **Create Agent**: Click 'Create Agent' to add it to your legal AI toolkit
+                5. **Create Agent**: Click 'Create Agent' to add it to your AI toolkit
                 6. **Come back here to manage**: Edit, view details, or delete agents
                 """)
 
@@ -1599,7 +1599,7 @@ elif chat_mode == "Create Agent":
             - Define specific expertise areas clearly
             - Include analysis frameworks and methodologies
             - Specify output format and structure
-            - Add relevant legal standards or regulations
+            - Add relevant standards or regulations
             - Use bullet points for clarity
             - Include examples of what to focus on
             """)
@@ -1626,7 +1626,7 @@ elif chat_mode == "Create Agent":
             st.markdown("""
             **Performance Optimization:**
             - Lower temperature (0.1-0.3) for consistent compliance checks
-            - Higher temperature (0.7-0.9) for creative legal brainstorming
+            - Higher temperature (0.7-0.9) for creative brainstorming
             - Adjust max tokens based on typical response needs
             - Monitor success rates and response times
             """)
@@ -1637,7 +1637,7 @@ elif chat_mode == "Create Agent":
         
         **Temperature Settings:**
         - **0.1-0.3**: Highly consistent, factual analysis (recommended for compliance)
-        - **0.4-0.7**: Balanced creativity and consistency (good for general legal work)
+        - **0.4-0.7**: Balanced creativity and consistency (good for general work)
         - **0.8-1.0**: More creative responses (useful for brainstorming or alternative approaches)
         """)
 
@@ -1991,10 +1991,10 @@ elif chat_mode == "Document Generator":
         rule_agent_templates = {
             "Rule Extraction Agent": {
                 "description": "Specialized agent for extracting detailed, testable rules and requirements from technical documents",
-                "system_prompt": """You are a MIL-STD compliance and test planning expert specializing in extracting comprehensive, testable rules from technical documents.
+                "system_prompt": """You are a test planning expert specializing in extracting comprehensive, testable rules from technical documents.
 
                 Your expertise includes:
-                1. **Rule Identification**: Identify EVERY possible testable rule, specification, constraint, or requirement
+                1. **Rule Identification**: Identify EVERY possible testable requirement which usually contains "shall", "must", "may", "will", "could" or "should"
                 2. **Detailed Analysis**: Extract rules that are extremely detailed, explicit, and step-by-step
                 3. **Measurable Criteria**: Include specific measurements, acceptable ranges, and referenced figures/tables
                 4. **Test Strategy**: For ambiguous requirements, describe specific test strategies
@@ -2003,11 +2003,8 @@ elif chat_mode == "Document Generator":
 
                 **Output Format Requirements:**
                 - Use markdown headings and bolded text for organization
-                - Generate content-based titles (avoid page numbers)
-                - Structure output with Dependencies, Conflicts, and Test Rules sections
-                - Number test rules sequentially with detailed steps
-                - Include specific measurement criteria and acceptance thresholds
-                - Reference applicable standards, figures, and tables
+                - Use the provided template to structure the output
+                - Include all relevant details from the analysis
 
                 **Analysis Approach:**
                 - Extract both explicit and implicit requirements
@@ -2015,34 +2012,13 @@ elif chat_mode == "Document Generator":
                 - Identify verification and validation methods
                 - Note any missing information that would affect testing
                 - Provide specific test procedures where applicable""",
-                            
-                            "user_prompt": """Analyze the following technical document section and extract comprehensive testable rules:
+
+                "user_prompt": """Develop a test plan based on the template provided and use the following document:
 
                 {data_sample}
 
-                Please provide a detailed rule extraction following this structure:
+                to develop a comprehensive test plan for each requirement with a verification method, verification approach, necessary test steps.""",
 
-                ## [Content-Based Section Title]
-
-                **Dependencies:**
-                - List detailed dependencies as explicit tests, if any
-
-                **Conflicts:**
-                - List detected or possible conflicts with recommendations/mitigation steps
-
-                **Test Rules:**
-                1. [Extremely detailed, step-by-step numbered test rules with specific criteria]
-                2. [Include measurement parameters, acceptance ranges, test conditions]
-                3. [Reference applicable standards, figures, or tables mentioned]
-
-                If no testable rules are found, reply: 'No testable rules in this section.'
-
-                Focus on creating rules that are:
-                - Specific and measurable
-                - Implementable as test procedures
-                - Complete with all necessary parameters
-                - Traceable to source requirements""",
-            
                 "temperature": 0.2,
                 "max_tokens": 2500
             },

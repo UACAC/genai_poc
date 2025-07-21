@@ -3,13 +3,68 @@ import io
 import uuid
 import base64
 import requests
-from typing import List, Optional
+from typing import List, Optional, Union
 from docx import Document
+import fitz
+import markdown
+import os
+from bs4 import BeautifulSoup
 from services.rag_service import RAGService
 from services.agent_service import AgentService
 from services.llm_service import LLMService
 from services.database import SessionLocal, ComplianceAgent
+class TemplateParser:
+    @staticmethod
+    def extract_headings_from_docx(path: str) -> List[str]:
+        doc = Document(path)
+        return [p.text for p in doc.paragraphs
+                if p.style.name.startswith("Heading") and p.text.strip()]
 
+    @staticmethod
+    def extract_headings_from_pdf(path: str, size_threshold: float = 16.0) -> List[str]:
+        doc = fitz.open(path)
+        headings = []
+        for page in doc:
+            for block in page.get_text("dict")["blocks"]:
+                if block["type"] != 0: continue
+                for line in block["lines"]:
+                    size = line["spans"][0]["size"]
+                    text = "".join(s["text"] for s in line["spans"]).strip()
+                    if size >= size_threshold and text:
+                        headings.append(text)
+        return headings
+
+    @staticmethod
+    def extract_headings_from_html(html: str) -> List[str]:
+        soup = BeautifulSoup(html, "html.parser")
+        headings = []
+        for level in range(1,7):
+            for tag in soup.find_all(f"h{level}"):
+                text = tag.get_text(strip=True)
+                if text:
+                    headings.append(text)
+        return headings
+
+    @staticmethod
+    def extract_headings_from_markdown(md: str) -> List[str]:
+        lines = md.splitlines()
+        return [l.lstrip("# ").strip() for l in lines
+                if l.startswith("#")]
+
+    @classmethod
+    def extract(cls, path_or_str: str, is_path: bool=True) -> List[str]:
+        ext = os.path.splitext(path_or_str if is_path else "")[1].lower()
+        if ext == ".docx":
+            return cls.extract_headings_from_docx(path_or_str)
+        if ext == ".pdf":
+            return cls.extract_headings_from_pdf(path_or_str)
+        if ext in {".html", ".htm"}:
+            html = open(path_or_str).read() if is_path else path_or_str
+            return cls.extract_headings_from_html(html)
+        if ext == ".md" or (not is_path and "\n" in path_or_str):
+            md = open(path_or_str).read() if is_path else path_or_str
+            return cls.extract_headings_from_markdown(md)
+        raise ValueError(f"Unsupported template format: {ext!r}")
 class DocumentService:
     def __init__(
         self,
@@ -48,11 +103,8 @@ class DocumentService:
         """
         Use your LLMService.query_model to do a RAG-enabled completion.
         We assume that in your DB you can look up the ComplianceAgent
-        to get its `model_name` (e.g. "gpt-4").
+        to get its `model_name`
         """
-        # load the agent metadata so we know which model to call
-        # (you can cache this lookup if you want)
-        
         session = SessionLocal()
         try:
             agent = session.query(ComplianceAgent).get(agent_id)
@@ -72,54 +124,41 @@ class DocumentService:
 
     def generate_documents(
         self,
-        template_collection: str,
-        template_doc_ids:    Optional[List[str]]    = None,
-        source_collections:  Optional[List[str]]    = None,
-        source_doc_ids:      Optional[List[str]]    = None,
-        agent_ids:           List[int]              = [],
-        use_rag:             bool                   = True,
-        top_k:               int                    = 5,
+        template_paths:       List[str],
+        source_collections:   List[str],
+        source_doc_ids:       List[str],
+        agent_ids:            List[int],
+        top_k:                int = 5
     ) -> List[dict]:
-        # --- 1) RAG‐retrieve template skeletons ---
-        templates = []
-        if use_rag and template_doc_ids:
-            for tid in template_doc_ids:
-                docs, ok = self.rag.get_relevant_documents(tid, template_collection)
-                if ok:
-                    templates.append("\n\n".join(docs[:top_k]))
-        else:
-            templates = self._fetch_templates(template_collection)
-
-        # --- 2) RAG‐retrieve source requirements ---
-        sources = []
-        if use_rag and source_collections and source_doc_ids:
-            for coll, sid in zip(source_collections, source_doc_ids):
-                docs, ok = self.rag.get_relevant_documents(sid, coll)
-                if ok:
-                    sources.append("\n\n".join(docs[:top_k]))
-
         out = []
-        for i, tmpl in enumerate(templates):
-            # --- 3) Build the prompt ---
-            prompt = "\n\n".join(filter(None, [
-                "TEMPLATE SKELETON:",
-                tmpl,
-                "SOURCE REQUIREMENTS:",
-                "\n\n".join(sources),
-                "Please fill out the above template using the source requirements and produce a complete test plan."
-            ]))
+        # load your agents once
+        self.agent.load_selected_compliance_agents(agent_ids)
 
-            # --- 4) For each agent, invoke exactly one RAG→LLM chain ---
-            # we'll collect all outputs in turn; you could also just pick one agent.
-            analyses = []
-            # make sure we load all agents just once per call
-            self.agent.load_selected_compliance_agents(agent_ids)
+        for tpl_path in template_paths:
+            headings = TemplateParser.extract(tpl_path, is_path=True)
+            doc = Document()
+            doc.add_heading(os.path.basename(tpl_path), level=1)
 
-            for aid in agent_ids:
-                # pick the matching metadata dict
-                agent_meta = next(a for a in self.agent.compliance_agents if a["id"] == aid)
+            for heading in headings:
+                # 1) RAG‐retrieve source context for this section
+                ctx = []
+                for coll, sid in zip(source_collections, source_doc_ids):
+                    docs, ok = self.rag.get_relevant_documents(sid, coll)
+                    if ok:
+                        ctx += docs[:top_k]
+                context = "\n\n".join(ctx)
 
-                # invoke the unified direct-LLM path (which uses that agent's system+user prompts)
+                # 2) build your per‐section prompt
+                prompt = f"""### Section: {heading}
+
+Using the following material, write the content for this section of the test plan:
+
+{context}
+"""
+
+                # 3) call your agent’s RAG+LLM chain
+                agent_meta = next(a for a in self.agent.compliance_agents
+                                  if a["id"] == agent_ids[0])
                 db = SessionLocal()
                 try:
                     result = self.agent._invoke_chain(
@@ -128,24 +167,19 @@ class DocumentService:
                         session_id=str(uuid.uuid4()),
                         db=db
                     )
-                    analyses.append(result["reason"])
                 finally:
                     db.close()
 
-            # join multiple agent outputs if you like, or just pick the first
-            analysis = "\n\n---\n\n".join(analyses)
+                # 4) insert into the docx
+                doc.add_heading(heading, level=2)
+                doc.add_paragraph(result["reason"])
 
-            # --- 5) Pack into a DOCX ---
-            doc = Document()
-            title = f"tmpl_{i}"
-            doc.add_heading(title, level=1)
-            doc.add_paragraph(analysis)
+            # 5) serialize back to base64
             buf = io.BytesIO()
             doc.save(buf)
             out.append({
-                "title":   title,
-                "docx_b64": base64.b64encode(buf.getvalue()).decode("utf-8")
+                "title": os.path.splitext(os.path.basename(tpl_path))[0],
+                "docx_b64": base64.b64encode(buf.getvalue()).decode()
             })
 
         return out
-
