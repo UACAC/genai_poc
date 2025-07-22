@@ -590,7 +590,6 @@ async def get_agent_performance_metrics(agent_id: int, db: Session = Depends(get
                 "message": "No response data available for this agent"
             }
         
-        # Calculate performance metrics
         responses = db.query(AgentResponse).filter(
             AgentResponse.agent_id == agent_id
         ).all()
@@ -754,12 +753,13 @@ doc_service = DocumentService(
 
 class GenerateRequest(BaseModel):
     template_collection:  str
-    template_doc_ids:     Optional[List[str]] = None
-    source_collections:   Optional[List[str]] = None
-    source_doc_ids:       Optional[List[str]] = None
+    template_doc_ids:     Optional[List[str]]   = None
+    source_collections:   Optional[List[str]]   = None
+    source_doc_ids:       Optional[List[str]]   = None
     agent_ids:            List[int]
-    use_rag:              bool               = True
-    top_k:                int                = 5
+    use_rag:              bool                  = True
+    top_k:                int                   = 5
+    doc_title:            str                   = None
 
 @router.post("/generate_documents")
 async def generate_documents(req: GenerateRequest):
@@ -773,5 +773,6 @@ async def generate_documents(req: GenerateRequest):
         req.agent_ids,
         req.use_rag,
         req.top_k,
+        req.doc_title
     )
     return {"documents": docs}

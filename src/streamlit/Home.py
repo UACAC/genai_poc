@@ -2534,7 +2534,7 @@ elif chat_mode == "Document Generator":
         # ——————————————————————————
         out_name = st.text_input(
             "Output file name (no extension):",
-            value="Generated_Analysis",
+            value="Generated_Test_Plan",
             key="gen_filename"
         ).strip()
 
@@ -2553,6 +2553,7 @@ elif chat_mode == "Document Generator":
                     "agent_ids":           agent_ids,
                     "use_rag":             True,
                     "top_k":               5,
+                    "doc_title":           out_name
                 }
                 st.write("about to call /generate_documents on", FASTAPI_API)
                 st.write("Payload:", payload)
@@ -2560,8 +2561,8 @@ elif chat_mode == "Document Generator":
                     try:
                         resp = requests.post(
                             f"{FASTAPI_API}/generate_documents",
-                            json=payload,
-                            timeout=300
+                            json=payload
+                            # timeout=300
                         )
                         # now resp is guaranteed to exist
                         if not resp.ok:

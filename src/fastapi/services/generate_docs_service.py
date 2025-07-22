@@ -8,11 +8,13 @@ from docx import Document
 import fitz
 import markdown
 import os
+import mimetypes
 from bs4 import BeautifulSoup
 from services.rag_service import RAGService
 from services.agent_service import AgentService
 from services.llm_service import LLMService
 from services.database import SessionLocal, ComplianceAgent
+
 class TemplateParser:
     @staticmethod
     def extract_headings_from_docx(path: str) -> List[str]:
@@ -50,10 +52,25 @@ class TemplateParser:
         lines = md.splitlines()
         return [l.lstrip("# ").strip() for l in lines
                 if l.startswith("#")]
+        
+    @staticmethod
+    def extract_headings_from_text(text: str) -> List[str]:
+        return [
+            line.lstrip("# ").strip()
+            for line in text.splitlines()
+            if line.startswith("# ")
+        ]
 
     @classmethod
     def extract(cls, path_or_str: str, is_path: bool=True) -> List[str]:
-        ext = os.path.splitext(path_or_str if is_path else "")[1].lower()
+        if not is_path:
+            return cls.extract_headings_from_text(path_or_str)
+
+        # ext = os.path.splitext(path_or_str if is_path else "")[1].lower()
+        ext = os.path.splitext(path_or_str)[1].lower()
+        
+        if ext == ".docx":
+            return cls.extract_headings_from_docx(path_or_str)
         if ext == ".docx":
             return cls.extract_headings_from_docx(path_or_str)
         if ext == ".pdf":
@@ -120,66 +137,89 @@ class DocumentService:
             query_type="rag",
         )
         return answer
+    
+    def _reconstruct_template(self, doc_id: str, collection: str) -> str:
+        resp = requests.get(
+            f"{self.chroma_url}/documents/reconstruct/{doc_id}",
+            params={"collection_name": collection}
+        )
+        resp.raise_for_status()
+
+        data = resp.json()
+        text = data.get("reconstructed_content")
+        if text is None:
+            raise RuntimeError(f"No reconstructed_content in response: {list(data.keys())!r}")
+
+        return text
+
+
 
 
     def generate_documents(
         self,
-        template_paths:       List[str],
-        source_collections:   List[str],
-        source_doc_ids:       List[str],
-        agent_ids:            List[int],
-        top_k:                int = 5
+        template_collection: str,
+        template_doc_ids:    Optional[List[str]] = None,
+        source_collections:  Optional[List[str]] = None,
+        source_doc_ids:      Optional[List[str]] = None,
+        agent_ids:           List[int]           = [],
+        use_rag:             bool                = True,
+        top_k:               int                 = 5,
+        doc_title:           Optional[str]       = None,
     ) -> List[dict]:
         out = []
-        # load your agents once
         self.agent.load_selected_compliance_agents(agent_ids)
 
-        for tpl_path in template_paths:
-            headings = TemplateParser.extract(tpl_path, is_path=True)
+        # 1) get raw text for each template
+        tpl_texts = [
+        self._reconstruct_template(tid, template_collection)
+        for tid in (template_doc_ids or [])
+        ]
+
+        for tpl_text in tpl_texts:
+            # 2) extract just the top‑level headings
+            headings = TemplateParser.extract(tpl_text, is_path=False)
+
             doc = Document()
-            doc.add_heading(os.path.basename(tpl_path), level=1)
+            title = doc_title 
+            doc.add_heading(title, level=1)
 
+            # 3) for each heading, RAG + agent
             for heading in headings:
-                # 1) RAG‐retrieve source context for this section
-                ctx = []
-                for coll, sid in zip(source_collections, source_doc_ids):
-                    docs, ok = self.rag.get_relevant_documents(sid, coll)
-                    if ok:
-                        ctx += docs[:top_k]
-                context = "\n\n".join(ctx)
+                # 3a) retrieve your source context exactly as you already do
+                ctx_pieces = []
+                if use_rag and source_collections and source_doc_ids:
+                    for coll, sid in zip(source_collections, source_doc_ids):
+                        docs, ok = self.rag.get_relevant_documents(sid, coll)
+                        if ok:
+                            ctx_pieces += docs[:top_k]
+                context = "\n\n".join(ctx_pieces)
 
-                # 2) build your per‐section prompt
+                # 3b) build the prompt
                 prompt = f"""### Section: {heading}
 
-Using the following material, write the content for this section of the test plan:
+Using the following source material, write the content for this section of the test plan:
 
 {context}
 """
+                # 3c) call your agent
+                agent_meta = next(a for a in self.agent.compliance_agents if a["id"] == agent_ids[0])
+                result = self.agent._invoke_chain(
+                    agent=agent_meta,
+                    data_sample=prompt,
+                    session_id=str(uuid.uuid4()),
+                    db=SessionLocal()
+                )
 
-                # 3) call your agent’s RAG+LLM chain
-                agent_meta = next(a for a in self.agent.compliance_agents
-                                  if a["id"] == agent_ids[0])
-                db = SessionLocal()
-                try:
-                    result = self.agent._invoke_chain(
-                        agent=agent_meta,
-                        data_sample=prompt,
-                        session_id=str(uuid.uuid4()),
-                        db=db
-                    )
-                finally:
-                    db.close()
-
-                # 4) insert into the docx
+                # 3d) emit into the DOCX
                 doc.add_heading(heading, level=2)
                 doc.add_paragraph(result["reason"])
 
-            # 5) serialize back to base64
+            # 4) serialize and return
             buf = io.BytesIO()
             doc.save(buf)
             out.append({
-                "title": os.path.splitext(os.path.basename(tpl_path))[0],
-                "docx_b64": base64.b64encode(buf.getvalue()).decode()
+                "title":    title,
+                "docx_b64": base64.b64encode(buf.getvalue()).decode("utf‑8")
             })
 
         return out
