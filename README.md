@@ -19,7 +19,8 @@ make build
 1. Builds the environment:
    - Postgres database
    - Chroma Database 
-   - Llama (tinyllama)
+   - Redis Cache server
+   - Llama
    - Fast API
    - Streamlit application
 
@@ -42,9 +43,6 @@ To stop services:
 ```bash
 ./end.sh
 ```
-
-
-
 
 # Migrate openai 
 After running environment need to run
