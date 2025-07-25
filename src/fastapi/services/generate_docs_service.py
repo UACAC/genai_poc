@@ -153,8 +153,6 @@ class DocumentService:
         return text
 
 
-
-
     def generate_documents(
         self,
         template_collection: str,
@@ -164,28 +162,30 @@ class DocumentService:
         agent_ids:           List[int]           = [],
         use_rag:             bool                = True,
         top_k:               int                 = 5,
-        doc_title:           Optional[str]       = None,
+        doc_title:          Optional[str]        = None,
     ) -> List[dict]:
         out = []
+        # load agents once
         self.agent.load_selected_compliance_agents(agent_ids)
 
-        # 1) get raw text for each template
+        # get raw markdown/text for each template
         tpl_texts = [
-        self._reconstruct_template(tid, template_collection)
-        for tid in (template_doc_ids or [])
+            self._reconstruct_template(tid, template_collection)
+            for tid in (template_doc_ids or [])
         ]
 
         for tpl_text in tpl_texts:
-            # 2) extract just the top‑level headings
-            headings = TemplateParser.extract(tpl_text, is_path=False)
+            # extract all Markdown headings (#, ##, ###, etc.)
+            headings = TemplateParser.extract_headings_from_markdown(tpl_text)
 
+            # create a fresh .docx
             doc = Document()
-            title = doc_title 
+            title = doc_title or "Generated Test Plan"
             doc.add_heading(title, level=1)
 
-            # 3) for each heading, RAG + agent
+            # now fill in each section
             for heading in headings:
-                # 3a) retrieve your source context exactly as you already do
+                # 1) RAG‐retrieve your source context for this heading
                 ctx_pieces = []
                 if use_rag and source_collections and source_doc_ids:
                     for coll, sid in zip(source_collections, source_doc_ids):
@@ -194,14 +194,15 @@ class DocumentService:
                             ctx_pieces += docs[:top_k]
                 context = "\n\n".join(ctx_pieces)
 
-                # 3b) build the prompt
+                # 2) build the per-section prompt
                 prompt = f"""### Section: {heading}
 
-Using the following source material, write the content for this section of the test plan:
+    Using the following source material, write the content for this section of the test plan:
 
-{context}
-"""
-                # 3c) call your agent
+    {context}
+    """
+
+                # 3) call your agent
                 agent_meta = next(a for a in self.agent.compliance_agents if a["id"] == agent_ids[0])
                 result = self.agent._invoke_chain(
                     agent=agent_meta,
@@ -209,17 +210,31 @@ Using the following source material, write the content for this section of the t
                     session_id=str(uuid.uuid4()),
                     db=SessionLocal()
                 )
+                response_md = result["reason"]
 
-                # 3d) emit into the DOCX
+                # 4) convert the Markdown response into *real* docx
+                html = markdown.markdown(response_md)
+                soup = BeautifulSoup(html, "html.parser")
                 doc.add_heading(heading, level=2)
-                doc.add_paragraph(result["reason"])
+                for el in soup.contents:
+                    if el.name and el.name.startswith("h"):
+                        lvl = int(el.name[1])
+                        doc.add_heading(el.get_text(), level=lvl)
+                    elif el.name == "p":
+                        doc.add_paragraph(el.get_text())
+                    elif el.name == "ul":
+                        for li in el.find_all("li"):
+                            doc.add_paragraph(f"• {li.get_text()}")
+                    elif el.name == "ol":
+                        for idx, li in enumerate(el.find_all("li"), 1):
+                            doc.add_paragraph(f"{idx}. {li.get_text()}")
 
-            # 4) serialize and return
+            # 5) serialize to base64 & collect
             buf = io.BytesIO()
             doc.save(buf)
             out.append({
                 "title":    title,
-                "docx_b64": base64.b64encode(buf.getvalue()).decode("utf‑8")
+                "docx_b64": base64.b64encode(buf.getvalue()).decode("utf-8")
             })
 
         return out
