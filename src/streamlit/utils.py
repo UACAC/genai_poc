@@ -1,31 +1,38 @@
 import os
 import re
 import tempfile
-# import time
 import requests
-# from PyPDF2 import PdfReader
 from sentence_transformers import SentenceTransformer
 from docx import Document
 from docx.shared import Inches
 from fpdf import FPDF  
 import streamlit as st
-# import base64
 from io import BytesIO
 from PIL import Image
 import datetime
 from io import BytesIO
-# from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 # ChromaDB API endpoint
 CHROMADB_API = os.getenv("CHROMA_URL", "http://localhost:8020")
 LLM_API = os.getenv("LLM_API", "http://localhost:9020")
 
+
+# Model configurations
+model_key_map = {
+    "GPT-4": "gpt-4",
+    "GPT-3.5-Turbo": "gpt-3.5-turbo", 
+    "LLaMA 3": "llama3",
+}
+
+model_descriptions = {
+    "GPT-4": "Most capable model for complex analysis",
+    "GPT-3.5-Turbo": "Cost-effective model for general tasks",
+    "LLaMA 3": "Fast and efficient general-purpose model",
+}
+
 # Load Sentence Transformer model
 embedding_model = SentenceTransformer('multi-qa-mpnet-base-dot-v1')
-
-
-
 
 def create_collection(collection_name):
     """Create a new ChromaDB collection"""

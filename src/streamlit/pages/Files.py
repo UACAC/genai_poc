@@ -3,7 +3,8 @@ import requests
 import utils 
 import torch
 import os
-from upload_documents import render_upload_component
+from components.upload_documents import render_upload_component
+from components.healthcheck_sidebar import healthcheck_sidebar
 import pandas as pd
 from sentence_transformers import SentenceTransformer
 import time
@@ -150,6 +151,11 @@ def wait_for_job(job_id, poll_interval=2):
             time.sleep(poll_interval)
             continue
         return status
+    
+# ----------------------------------------------------------------------
+# SIDEBAR - SYSTEM STATUS & CONTROLS
+# ----------------------------------------------------------------------
+healthcheck_sidebar()
 
 ## -------------------------------------------------------- 
 # Streamlit app configuration
@@ -158,26 +164,7 @@ def wait_for_job(job_id, poll_interval=2):
 st.set_page_config(page_title="Document Management", layout="wide")
 st.title("Document & Collection Management")
 
-# connection status 
-with st.sidebar:
-    st.subheader("Service Status")
-    connected, health_data = test_chromadb_connection()
-    
-    if connected:
-        st.success("ChromaDB Connected")
-        
-        # Show vision model status
-        if health_data and "vision_models" in health_data:
-            st.subheader("Vision Models")
-            vision_models = health_data["vision_models"]
-            for model, status in vision_models.items():
-                icon = "✅" if status else "❌"
-                st.write(f"{icon} {model.replace('_', ' ').title()}")
-        
-    else:
-        st.error("ChromaDB Disconnected")
-        st.info(f"Trying to connect to: {CHROMADB_API}")
-        
+
 ### --------------------------------------------------------------------------
 ### Document Upload and Management
 ### --------------------------------------------------------------------------
