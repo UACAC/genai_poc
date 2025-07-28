@@ -1260,7 +1260,7 @@ elif chat_mode == "Create Agent":
                                 )
                                 
                                 # Model selection for edit
-                                available_models = st.session_state.available_models or get_available_models_cached()
+                                available_models = get_available_models_cached()
                                 current_model = selected_agent.get("model_name", "")
                                 
                                 if current_model in available_models:
@@ -1987,7 +1987,7 @@ elif chat_mode == "Document Generator":
             }
         }
         
-        available_models = st.session_state.available_models or get_available_models_cached()
+        available_models = get_available_models_cached()
         
         # Manual Agent Creation Section - WITH PROPER TEMPLATE HANDLING
         st.subheader("Agent Creation")
