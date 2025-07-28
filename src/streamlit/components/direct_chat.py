@@ -3,12 +3,13 @@ import requests
 from utils import *
 from components.upload_documents import render_upload_component
 
+# Constants
+FASTAPI_API = os.getenv("FASTAPI_URL", "http://localhost:9020")
+CHROMADB_API = os.getenv("CHROMA_URL", "http://localhost:8020") 
+CHAT_ENDPOINT = f"{FASTAPI_API}/chat"
+HISTORY_ENDPOINT = f"{FASTAPI_API}/chat-history"
+
 def Direct_Chat():
-    # Constants
-    CHAT_ENDPOINT = "http://localhost:8000/chat"
-    HISTORY_ENDPOINT = "http://localhost:8000/chat/history"
-    CHROMADB_API = "http://localhost:8000/chromadb"
-    
     # Display collections
     collections = st.session_state.collections
     if collections:

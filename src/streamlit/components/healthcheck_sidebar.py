@@ -6,11 +6,8 @@ from utils import *
 FASTAPI_API = os.getenv("FASTAPI_URL", "http://localhost:9020")
 HEALTH_ENDPOINT = f"{FASTAPI_API}/health"
 
-# ----------------------------------------------------------------------
-# SIDEBAR - SYSTEM STATUS & CONTROLS
-# ----------------------------------------------------------------------
 
-def healthcheck_sidebar():
+def Healthcheck_Sidebar():
     """Render the sidebar with system health check and collections"""
     
     # Initialize session state for health status

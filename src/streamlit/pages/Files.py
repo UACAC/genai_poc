@@ -4,7 +4,7 @@ import utils
 import torch
 import os
 from components.upload_documents import render_upload_component
-from components.healthcheck_sidebar import healthcheck_sidebar
+from components.healthcheck_sidebar import Healthcheck_Sidebar
 import pandas as pd
 from sentence_transformers import SentenceTransformer
 import time
@@ -155,7 +155,7 @@ def wait_for_job(job_id, poll_interval=2):
 # ----------------------------------------------------------------------
 # SIDEBAR - SYSTEM STATUS & CONTROLS
 # ----------------------------------------------------------------------
-healthcheck_sidebar()
+Healthcheck_Sidebar()
 
 ## -------------------------------------------------------- 
 # Streamlit app configuration

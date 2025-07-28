@@ -8,8 +8,6 @@ import pandas as pd
 
 CHROMADB_API = os.getenv("CHROMA_URL", "http://localhost:8020")
 
-
-
 def render_upload_component(
     available_collections: list[str],
     load_collections_func: callable,
