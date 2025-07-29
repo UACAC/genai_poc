@@ -96,15 +96,6 @@ class LLMService:
         raw_text, response_time_ms = self.query_model(model_name, query_text, collection_name, query_type="rag", session_id=session_id)
         lines = raw_text.split("\n", 1)
         
-        # first_line = lines[0].lower()
-
-        # if "yes" in first_line:
-        #     compliant = True
-        # elif "no" in first_line:
-        #     compliant = False
-        # else:
-        #     compliant = None
-
         reason = lines[1].strip() if len(lines) > 1 else ""
 
         log_compliance_result(
@@ -127,12 +118,6 @@ class LLMService:
         self.load_selected_compliance_agents(agent_ids)
         session_id = str(uuid.uuid4())
         rag_results = self.run_parallel_rag_checks(query_text, collection_name, db, session_id=session_id)
-        # bool_vals = [res["compliant"] for res in rag_results.values() if res["compliant"] is not None]
-        # all_compliant = bool_vals and all(bool_vals)
-
-        # if all_compliant:
-        #     return {"overall_compliance": True, "details": rag_results}
-        # else:
         for idx, agent_info in enumerate(self.compliance_agents):
             db.add(DebateSession(session_id=session_id, compliance_agent_id=agent_info["id"], debate_order=idx + 1))
         db.commit()

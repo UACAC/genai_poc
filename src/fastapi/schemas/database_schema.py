@@ -83,3 +83,11 @@ class ComplianceResultSchema(BaseModel):
     overall_compliance: bool
     session_id: Optional[str] = None
     debate_results: Optional[Dict[str, Any]] = None
+    
+
+class EvaluateRequest(BaseModel):
+    document_id: str
+    collection_name: str
+    prompt: str
+    top_k: Optional[int] = 5
+    model_name: str
