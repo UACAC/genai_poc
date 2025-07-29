@@ -1,9 +1,6 @@
-# JITC Gen AI Validation Tool
-
-This project is to provide a validation suite in which inteoperability of systems is evaluated.
-
-The goal is to receive messages and validate that the messages are in accordance with the standards such as IEEE 802.11 or MIL-STD
-
+# Gen AI Application
+This Gen AI application allows us to provide research on Gen AI ,RAG, CAG, and other explainable AI aspects. 
+This contains a chatbot, vector database in chromadb, and a postgres db. We have also incorporated redis cache. 
 # Set Up
 
 There is a make file in which you are able to build up the docker image to run the application.
