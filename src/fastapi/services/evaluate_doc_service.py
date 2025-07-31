@@ -1,20 +1,20 @@
-from typing import List
+from typing import List, Optional
+from pydantic import Field
 from services.rag_service import RAGService
 from services.llm_service import LLMService
 
 class EvaluationService:
-    def __init__(self, rag: RAGService, llm: LLMService, model_name: str):
+    def __init__(self, rag: RAGService, llm: LLMService):
         self.rag = rag
         self.llm = llm
-        self.model_name = model_name
 
     def evaluate_document(
         self,
         document_id: str,
         collection_name: str,
         prompt: str,
-        top_k: int = 5,
-        model_name: str = None
+        top_k: Optional[int] = Field(5),
+        model_name: Optional[str] = Field(...)
     ) -> str:
         # 1) RAG‐fetch the most relevant chunks of your document
         chunks, _ = self.rag.get_relevant_documents(document_id, collection_name)
@@ -32,7 +32,7 @@ Now: {prompt}
 
         # 3) call your LLMService just like you do elsewhere
         answer, _ = self.llm.query_model(
-            model_name=self.model_name if self.model_name else "gpt-4",
+            model_name=model_name or "gpt-4",
             query=full_prompt,
             collection_name=collection_name,
             query_type="rag"

@@ -89,5 +89,5 @@ class EvaluateRequest(BaseModel):
     document_id: str
     collection_name: str
     prompt: str
-    top_k: Optional[int] = 5
-    model_name: str
+    top_k: Optional[int] = Field(5, description="How many chunks to retrieve")
+    model_name: str = Field(..., description="Model to use for evaluation")

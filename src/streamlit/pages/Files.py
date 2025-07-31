@@ -176,5 +176,6 @@ render_upload_component(
     load_collections_func= utils.get_chromadb_collections,
     create_collection_func= utils.create_collection,
     upload_endpoint=f"{CHROMADB_API}/documents/upload-and-process",
-    job_status_endpoint=f"{CHROMADB_API}/jobs/{{job_id}}"
+    job_status_endpoint=f"{CHROMADB_API}/jobs/{{job_id}}", 
+    key_prefix="files_upload"
 )

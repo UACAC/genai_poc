@@ -5,12 +5,13 @@ from sqlalchemy.orm import Session
 import time
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from services.database import ComplianceAgent, DebateSession, ChatHistory, SessionLocal
 from services.llm_service import LLMService
 from services.agent_service import AgentService
 from services.rag_service import RAGService 
 from services.generate_docs_service import DocumentService
+from services.evaluate_doc_service import EvaluationService
 from schemas.database_schema import (
     ComplianceCheckRequest,
     RAGCheckRequest,
@@ -19,7 +20,8 @@ from schemas.database_schema import (
     CreateAgentResponse,
     GetAgentsResponse,
     UpdateAgentRequest,
-    UpdateAgentResponse
+    UpdateAgentResponse,
+    EvaluateRequest
 )
 from langchain_core.messages import HumanMessage
 from starlette.concurrency import run_in_threadpool
@@ -776,3 +778,25 @@ async def generate_documents(req: GenerateRequest):
         req.doc_title
     )
     return {"documents": docs}
+
+
+
+eval_svc = EvaluationService(
+    rag=rag_service,
+    llm=llm_service
+)
+
+@router.post("/evaluate_doc")
+async def evaluate_document(req: EvaluateRequest):
+    try:
+        answer = await run_in_threadpool(
+            eval_svc.evaluate_document,
+            req.document_id,
+            req.collection_name,
+            req.prompt,
+            req.top_k,
+            req.model_name,
+        )
+        return {"evaluation": answer}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
