@@ -29,7 +29,7 @@ class LLMService:
 
     def get_llm_service(self, model_name: str):
         model_name = model_name.lower()
-        if model_name in ["gpt4", "gpt-4", "gpt-3.5-turbo"]:
+        if model_name in ["gpt-4", "gpt-3.5-turbo"]:
             return get_llm(model_name=model_name)
         elif model_name in ["llama", "llama3"]:
             return get_llm(model_name=model_name)

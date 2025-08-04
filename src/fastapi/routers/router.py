@@ -21,7 +21,8 @@ from schemas.database_schema import (
     GetAgentsResponse,
     UpdateAgentRequest,
     UpdateAgentResponse,
-    EvaluateRequest
+    EvaluateRequest,
+    EvaluateResponse
 )
 from langchain_core.messages import HumanMessage
 from starlette.concurrency import run_in_threadpool
@@ -786,17 +787,45 @@ eval_svc = EvaluationService(
     llm=llm_service
 )
 
-@router.post("/evaluate_doc")
-async def evaluate_document(req: EvaluateRequest):
+@router.post("/evaluate_doc", response_model=EvaluateResponse)
+async def evaluate_doc(req: EvaluateRequest, db: Session = Depends(get_db)):
     try:
-        answer = await run_in_threadpool(
-            eval_svc.evaluate_document,
-            req.document_id,
-            req.collection_name,
-            req.prompt,
-            req.top_k,
-            req.model_name,
+        # generate a session_id so you can track history
+        doc_session_id = str(uuid.uuid4())
+
+        answer, rt_ms = eval_svc.evaluate_document(
+            document_id     = req.document_id,
+            collection_name = req.collection_name,
+            prompt          = req.prompt,
+            top_k           = req.top_k,
+            model_name      = req.model_name,
+            session_id      = doc_session_id,      
         )
-        return {"evaluation": answer}
+        # Save chat history
+        try:
+            eval_history = ChatHistory(
+                user_query=req.prompt,
+                response=answer,
+                model_used=req.model_name,
+                query_type="rag",
+                response_time_ms=rt_ms,
+                langchain_used=True,
+                session_id=doc_session_id
+            )
+            db.add(eval_history)
+            db.commit()
+        except Exception as e:
+            print(f"Failed to save evaluation history: {e}")
+            db.rollback()
+
+        return EvaluateResponse(
+            document_id     = req.document_id,
+            collection_name = req.collection_name,
+            prompt          = req.prompt,
+            model_name      = req.model_name,
+            response        = answer,
+            response_time_ms= rt_ms,
+            session_id      = doc_session_id,
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

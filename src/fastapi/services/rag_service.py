@@ -204,15 +204,15 @@ class RAGService:
                 if similarity >= self.similarity_threshold:
                     filtered_docs.append(doc)
             
-            print(f"After threshold filter ({self.similarity_threshold}): {len(filtered_docs)} docs")
+            # print(f"After threshold filter ({self.similarity_threshold}): {len(filtered_docs)} docs")
             
             # If no docs pass threshold, use top results anyway
             if not filtered_docs and documents:
-                print(f"No docs passed threshold, using top {min(3, len(documents))} results")
+                # print(f"No docs passed threshold, using top {min(3, len(documents))} results")
                 filtered_docs = documents[:3]
             
             if filtered_docs:
-                print(f"Successfully retrieved {len(filtered_docs)} relevant documents")
+                # print(f"Successfully retrieved {len(filtered_docs)} relevant documents")
                 return filtered_docs, True
             else:
                 print(f"No relevant documents found")

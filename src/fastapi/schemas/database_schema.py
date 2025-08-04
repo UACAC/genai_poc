@@ -86,8 +86,17 @@ class ComplianceResultSchema(BaseModel):
     
 
 class EvaluateRequest(BaseModel):
-    document_id: str
+    document_id:     str = Field(...)
+    collection_name: str = Field(...)
+    prompt:          str = Field(...)
+    top_k:           int = Field(5)
+    model_name:      str = Field(...)
+
+class EvaluateResponse(BaseModel):
+    document_id:     str
     collection_name: str
-    prompt: str
-    top_k: Optional[int] = Field(5, description="How many chunks to retrieve")
-    model_name: str = Field(..., description="Model to use for evaluation")
+    prompt:          str
+    model_name:      str
+    response:        str
+    response_time_ms:int
+    session_id:      str
