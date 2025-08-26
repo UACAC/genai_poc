@@ -12,6 +12,7 @@ from components.direct_chat import Direct_Chat
 from components.agent_sim import Agent_Sim
 from components.ai_agent import AI_Agent
 from components.document_generator import Document_Generator
+from components.rag_assessment import RAGAS_Dashboard
 from components.session_history import Session_History
 
 torch.classes.__path__ = []
@@ -55,7 +56,7 @@ Healthcheck_Sidebar()
 # Chat mode selection
 chat_mode = st.radio(
     "Select Mode:",
-    ["Direct Chat", "AI Agent Simulation", "AI Agents", "Document Generator", "Session History"],
+    ["Direct Chat", "AI Agent Simulation", "AI Agents", "Document Generator", "RAG Assessment", "Session History"],
     horizontal=True
 )
 
@@ -90,7 +91,14 @@ elif chat_mode == "AI Agents":
 elif chat_mode == "Document Generator":
     st.markdown("---")
     Document_Generator()
-    
+
+# ----------------------------------------------------------------------
+# RAG ASSESSMENT MODE
+# ----------------------------------------------------------------------
+elif chat_mode == "RAG Assessment":
+    st.markdown("---")
+    RAGAS_Dashboard()
+
 # ----------------------------------------------------------------------
 # SESSION HISTORY & ANALYTICS MODE
 # ----------------------------------------------------------------------
