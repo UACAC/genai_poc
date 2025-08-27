@@ -56,7 +56,8 @@ Healthcheck_Sidebar()
 # Chat mode selection
 chat_mode = st.radio(
     "Select Mode:",
-    ["Direct Chat", "AI Agent Simulation", "AI Agents", "Document Generator", "RAG Assessment", "Session History"],
+    # ["Direct Chat", "AI Agent Simulation", "AI Agents", "Document Generator", "RAG Assessment", "Session History"],
+    ["Direct Chat"],
     horizontal=True
 )
 
@@ -67,44 +68,44 @@ if chat_mode == "Direct Chat":
     st.markdown("---")
     Direct_Chat()
 
-# ----------------------------------------------------------------------
-# AI AGENT SIMULATION MODE
-# ----------------------------------------------------------------------
-elif chat_mode == "AI Agent Simulation":
-    st.markdown("---")
-    Agent_Sim()
+# # ----------------------------------------------------------------------
+# # AI AGENT SIMULATION MODE
+# # ----------------------------------------------------------------------
+# elif chat_mode == "AI Agent Simulation":
+#     st.markdown("---")
+#     Agent_Sim()
 
-# ----------------------------------------------------------------------
-# CREATE AGENT MODE (WITH MANAGEMENT SUB-MODES)
-# ----------------------------------------------------------------------
-elif chat_mode == "AI Agents":
-    st.markdown("---")
-    AI_Agent()
+# # ----------------------------------------------------------------------
+# # CREATE AGENT MODE (WITH MANAGEMENT SUB-MODES)
+# # ----------------------------------------------------------------------
+# elif chat_mode == "AI Agents":
+#     st.markdown("---")
+#     AI_Agent()
     
-    # Footer for create agent section
-    st.warning("**Agent Disclaimer**: All created agents provide analysis for informational purposes only and do not constitute advice.")
-    st.info("**Data Security**: Ensure all content processed by agents complies with your organization's data protection and confidentiality policies.")
+#     # Footer for create agent section
+#     st.warning("**Agent Disclaimer**: All created agents provide analysis for informational purposes only and do not constitute advice.")
+#     st.info("**Data Security**: Ensure all content processed by agents complies with your organization's data protection and confidentiality policies.")
     
-# ----------------------------------------------------------------------
-# DOCUMENT GENERATOR MODE
-# ----------------------------------------------------------------------
-elif chat_mode == "Document Generator":
-    st.markdown("---")
-    Document_Generator()
+# # ----------------------------------------------------------------------
+# # DOCUMENT GENERATOR MODE
+# # ----------------------------------------------------------------------
+# elif chat_mode == "Document Generator":
+#     st.markdown("---")
+#     Document_Generator()
 
-# ----------------------------------------------------------------------
-# RAG ASSESSMENT MODE
-# ----------------------------------------------------------------------
-elif chat_mode == "RAG Assessment":
-    st.markdown("---")
-    RAGAS_Dashboard()
+# # ----------------------------------------------------------------------
+# # RAG ASSESSMENT MODE
+# # ----------------------------------------------------------------------
+# elif chat_mode == "RAG Assessment":
+#     st.markdown("---")
+#     RAGAS_Dashboard()
 
-# ----------------------------------------------------------------------
-# SESSION HISTORY & ANALYTICS MODE
-# ----------------------------------------------------------------------
-elif chat_mode == "Session History":
-    st.markdown("---")
-    Session_History()
+# # ----------------------------------------------------------------------
+# # SESSION HISTORY & ANALYTICS MODE
+# # ----------------------------------------------------------------------
+# elif chat_mode == "Session History":
+#     st.markdown("---")
+#     Session_History()
     
 
 
