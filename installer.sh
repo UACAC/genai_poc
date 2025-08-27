@@ -74,10 +74,12 @@ download_models() {
     echo "Creating optimized temporary Dockerfile for model download..."
     cat > "$TEMP_DIR/Dockerfile" <<EOL
 FROM ollama/ollama:latest
-RUN apt-get update && apt-get install -y curl
+RUN apt-get update && apt-get install -y curl \\
+    && useradd -m ollamauser
 ENV OLLAMA_KEEP_ALIVE=-1
 ENV OLLAMA_NUM_PARALLEL=1
-WORKDIR /app
+USER ollamauser
+WORKDIR /home/ollamauser/app
 ENTRYPOINT ["/bin/sh"]
 EOL
 
@@ -88,7 +90,7 @@ EOL
         
         safe_model_name=$(echo "$model" | sed 's/:/_/g')
         
-        docker run --rm -v "$MODEL_DIR:/root/.ollama" ollama-downloader -c '
+        docker run --rm -v "$MODEL_DIR:/home/ollamauser/.ollama" ollama-downloader -c '
         export OLLAMA_KEEP_ALIVE=-1
         export OLLAMA_NUM_PARALLEL=1
         ollama serve &

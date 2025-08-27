@@ -105,9 +105,9 @@ def Direct_Chat():
 
                 doc_id = st.text_input(
                     "Document ID (for RAG mode):",
-                    placeholder="e.g. 12345abcde",
+                    placeholder="e.g. 12345abcde"
                 )
-                
+
                 custom_prompt = st.text_area(
                     "Custom Prompt:", height=150, key="eval_prompt"
                 )
