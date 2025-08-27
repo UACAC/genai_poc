@@ -70,7 +70,7 @@ def RAGAS_Dashboard():
             
             model_name = st.selectbox(
                 "Model:",
-                ["gpt-4", "gpt-3.5-turbo"],
+                ["gpt-4","gpt-3.5-turbo"],
                 key="rag_assessment_model"
             )
             
@@ -423,6 +423,7 @@ def RAGAS_Dashboard():
                         st.session_state.benchmark_configs = []
                     st.session_state.benchmark_configs.append(new_config)
                     st.success(f"Added: {config_model} (top_k={config_top_k})")
+                    st.rerun()
         
         # Display configured scenarios
         if "benchmark_configs" in st.session_state and st.session_state.benchmark_configs:
@@ -434,7 +435,8 @@ def RAGAS_Dashboard():
                 with col2:
                     if st.button("X", key=f"remove_config_{i}", help="Remove this configuration"):
                         st.session_state.benchmark_configs.pop(i)
-                        st.session_state.benchmark_configs.pop(i)
+                        st.rerun()
+        
         # Run benchmark
         if st.button("Run Benchmark", type="primary", key="run_benchmark"):
             if not benchmark_queries:
