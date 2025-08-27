@@ -95,7 +95,9 @@ def Direct_Chat():
         )
         collections = st.session_state.collections
         if use_rag_eval:
+            # Use the same document selection method as upload_documents.py
             browse_documents(key_prefix="select_eval_browse")
+            
             with st.container(border=True, key="eval_params_container"):
                 st.subheader("Evaluation Parameters")
                 
@@ -103,10 +105,41 @@ def Direct_Chat():
                     "Select Collection:", collections, key="eval_collection"
                 )
 
-                doc_id = st.text_input(
-                    "Document ID (for RAG mode):",
+                # Enhanced document selection - user can now select from loaded documents
+                doc_id = ""
+                if "documents" in st.session_state and st.session_state.documents:
+                    # Create options from loaded documents
+                    doc_options = {}
+                    for doc in st.session_state.documents:
+                        doc_name = doc.get('document_name', 'Unknown')
+                        doc_id_val = doc.get('id', doc.get('document_id', ''))
+                        if doc_id_val:
+                            display_name = f"{doc_name} (ID: {doc_id_val[:8]}...)"
+                            doc_options[display_name] = doc_id_val
+                    
+                    if doc_options:
+                        selected_display = st.selectbox(
+                            "Select Document:",
+                            options=list(doc_options.keys()),
+                            key="eval_document_selector"
+                        )
+                        doc_id = doc_options[selected_display]
+                        st.info(f"Selected Document ID: {doc_id}")
+                    else:
+                        st.warning("No documents found. Please load documents first using 'Load Documents' button above.")
+                else:
+                    st.info("Please load documents first using 'Load Documents' button above.")
+                
+                # Fallback manual entry
+                manual_doc_id = st.text_input(
+                    "Or enter Document ID manually:",
                     placeholder="e.g. 12345abcde",
+                    key="manual_doc_id"
                 )
+                
+                # Use manual entry if provided, otherwise use selected
+                if manual_doc_id:
+                    doc_id = manual_doc_id
                 
                 custom_prompt = st.text_area(
                     "Custom Prompt:", height=150, key="eval_prompt"

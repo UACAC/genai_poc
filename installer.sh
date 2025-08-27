@@ -2,7 +2,7 @@
 # Platform-agnostic GENAI Validation System setup
 
 # Configuration
-REPO_URL="https://github.com/martinmanuel9/dis_verification_genai"
+REPO_URL="https://github.com/UACAC/genai_poc.git"
 
 # Get current directory
 CURRENT_DIR="$(pwd)"
@@ -56,6 +56,47 @@ mkdir -p "$CURRENT_DIR/data/postgres"
 mkdir -p "$CURRENT_DIR/data/huggingface_cache"
 mkdir -p "$CURRENT_DIR/models"
 mkdir -p "$CURRENT_DIR/logs"
+
+# Create .venv directory for local poetry management
+echo "Creating .venv directory for local poetry management..."
+if [ ! -d "$CURRENT_DIR/.venv" ]; then
+    mkdir -p "$CURRENT_DIR/.venv"
+    echo ".venv directory created successfully"
+else
+    echo ".venv directory already exists"
+fi
+
+# Setup Poetry for local development
+echo "Setting up Poetry for local development..."
+
+# Check if Poetry is installed
+if ! command -v poetry &> /dev/null; then
+    echo "Poetry not found. Installing Poetry..."
+    curl -sSL https://install.python-poetry.org | python3 -
+    
+    # Add Poetry to PATH for current session
+    export PATH="$HOME/.local/bin:$PATH"
+    
+    echo "Poetry installed. You may need to restart your terminal or run:"
+    echo "export PATH=\"\$HOME/.local/bin:\$PATH\""
+else
+    echo "Poetry is already installed"
+fi
+
+# Configure Poetry to use the .venv directory
+echo "Configuring Poetry to use local .venv directory..."
+poetry config virtualenvs.in-project true
+poetry config virtualenvs.path "$CURRENT_DIR/.venv"
+
+# Install dependencies if pyproject.toml exists
+if [ -f "$CURRENT_DIR/pyproject.toml" ]; then
+    echo "Installing Poetry dependencies..."
+    cd "$CURRENT_DIR"
+    poetry install
+    echo "Poetry dependencies installed successfully"
+else
+    echo "No pyproject.toml found. Skipping Poetry dependency installation."
+fi
 
 GENERAL_MODELS=("llama3")
 
